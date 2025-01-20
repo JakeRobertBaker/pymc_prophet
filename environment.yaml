@@ -1,0 +1,7 @@
+name: pymc_env
+channels:
+  - conda-forge
+dependencies:
+  - nutpie
+  - pymc
+  - numba
