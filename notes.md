@@ -1,8 +1,10 @@
 # Setup
 Conda
 ```
-mamba create -c conda-forge -n pymc_env "pymc>=5" jupyter
+mamba env create -f environment.yaml
+
 ```
+# Model Notes
 
 ### Additive and Multiplicative interaction
 
@@ -10,4 +12,59 @@ According to [forecaster.py](https://github.com/facebook/prophet/blob/101dd50e31
 
 $$
 y = \text{trend} * (1 + \text{multiplicative terms}) + \text{additive terms}
+$$
+
+## Definitions
+
+$$
+\begin{align*}
+    y(t) &= \text{trend}(t) &&+ \text{seasonality}(t) &&+ \text{holiday}(t)
+    \\
+    &= g(t) &&+ s(t) &&+h(t)
+\end{align*}
+$$
+
+
+### Growth
+#### Logitistic
+Start with
+$$
+g(t) = \frac{C(t)}{1+\exp{(-k(t-m))}}
+$$
+
+Add changes in the growth rate. 
+
+Growth rate at time $t$ is defined as 
+$
+k(t) = k_j
+$
+where $s_j$ is the last changepoint before $t$ and $k_j = k+\sum_{l=1}^j\delta_l$ .
+
+i.e
+
+$$
+k(t) = 
+\begin{cases}
+    k_j &\text{ for } j=\max{\{ s_l : l<t \}} & \text{if } t\geq s_1 \\
+    k  && \text{if } t < s_1
+\end{cases} 
+\\
+= k+\sum_{j<t}\delta_j
+\\
+\\
+= k+\mathbf{a(t)^T \delta}
+$$
+
+To maintain continuity we need to adjust the offset parameter $m$. Define $m(t)$ in the same way. Need to enforce continuity at the changepoints. Require when $t=s_j$ that,
+
+$$
+\begin{align*}
+    k_{j-1} (t - m_{j-1}) &= k_j(t-m_j) \\
+    \frac{k_{j-1}}{k_j}(t-m_{j-1}) &= t-m_j \\
+    m_j &=t - \frac{k_{j-1}}{k_j}(t-m_{j-1}) \\
+    \iff m_j-m_{j-1} &= t(1-\frac{k_{j-1}}{k_j}) + m_{j-1}(\frac{k_{j-1}}{k_j} - 1) \\
+    &= (t-m_{j-1}) (1-\frac{k_{j-1}}{k_j}) && \coloneqq \gamma_j
+\end{align*}
+
+
 $$
