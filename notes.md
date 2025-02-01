@@ -1,4 +1,5 @@
 - [Setup](#setup)
+  - [TODO](#todo)
 - [Model Notes](#model-notes)
   - [Additive and Multiplicative interaction](#additive-and-multiplicative-interaction)
   - [Trend](#trend)
@@ -15,6 +16,9 @@ Conda
 ```
 mamba env create -f environment.yaml
 ```
+## TODO
+- Unit tests with data comparable to Prophet
+
 # Model Notes
 
 <TOC>
