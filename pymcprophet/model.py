@@ -78,9 +78,7 @@ class BayesTS:
         self.set_y_scale()
         self.add_eligible_auto_seasonalities()
 
-        # add seasonalities to df
-        # TODO
-
+        # use class information to produce the model matrix
         self.model_df = self._produce_model_matrix(df)
         self.data_assigned = True
 
@@ -171,6 +169,17 @@ class BayesTS:
         df["t_seasonality"] = dates
 
         # add seasonality cols
+        for term in self.seasonalities:
+            n_vals = np.arange(1, term.fourier_order + 1)
+            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / term.peroid)  # shape (fourier_order, T)
+
+            sine_terms = np.sin(t)  # shape (fourier_order, T)
+            sine_df = pd.DataFrame(sine_terms.T, columns=[f"{term.name}_sin_{n}" for n in n_vals])
+
+            cosine_terms = np.cos(t)  # shape (fourier_order, T)
+            cos_df = pd.DataFrame(cosine_terms.T, columns=[f"{term.name}_cos_{n}" for n in n_vals])
+
+            df = pd.concat([df, sine_df, cos_df], axis=1)
 
         return df
 
