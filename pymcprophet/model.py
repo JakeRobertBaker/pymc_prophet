@@ -29,6 +29,10 @@ class SeasonalityTermConfig(BaseModel):
     fourier_order: int = Field(gt=0)
     mode: Literal["additive", "multiplicative"] = "additive"
 
+class ModelCol(BaseModel):
+    name: str
+    mode: Literal["additive", "multiplicative"]
+
 
 class BayesTS:
     def __init__(self, config: BayesTSConfig):
@@ -49,12 +53,15 @@ class BayesTS:
         self.model_cols: dict[str, list[str]] = {
             "fundamental": ["ds", "y"],
             "logisitc": [],
-            "additive_regressors": [],
-            "multiplicative_regressors": [],
+            "regressors": [],
+            "seasonality": [],
         }
 
     def get_model_cols(self):
         return [col for col_list in self.model_cols.values() for col in col_list]
+    
+    def get_model_cols_by_type(self):
+        pass
 
     def assign_model_matrix(
         self,
@@ -168,10 +175,14 @@ class BayesTS:
             t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / term.period)  # shape (fourier_order, T)
 
             sine_terms = np.sin(t)  # shape (fourier_order, T)
-            sine_df = pd.DataFrame(sine_terms.T, columns=[f"{term.name}_sin_{n}" for n in n_vals])
+            sine_terms_col_names = [f"{term.name}_sin_{n}" for n in n_vals]
+            self.model_cols[f"{term.mode}_seasonality"].extend(sine_terms_col_names)
+            sine_df = pd.DataFrame(sine_terms.T, columns=sine_terms_col_names)
 
-            cosine_terms = np.cos(t)  # shape (fourier_order, T)
-            cos_df = pd.DataFrame(cosine_terms.T, columns=[f"{term.name}_cos_{n}" for n in n_vals])
+            cos_terms = np.cos(t)  # shape (fourier_order, T)
+            cos_terms_col_names = [f"{term.name}_cos_{n}" for n in n_vals]
+            self.model_cols[f"{term.mode}_seasonality"].extend(cos_terms_col_names)
+            cos_df = pd.DataFrame(cos_terms.T, columns=cos_terms_col_names)
 
             df = pd.concat([df, sine_df, cos_df], axis=1)
 
