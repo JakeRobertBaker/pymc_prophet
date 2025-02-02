@@ -19,9 +19,12 @@ class BayesTSConfig(BaseModel):
         return v
 
 
+# TODO rarefactor into keyed lists
+
+
 # an individual feature ----------
 class Feature(BaseModel, validate_assignment=True):
-    col_name: str
+    pass
 
 
 class RegressorFeature(Feature):
@@ -31,22 +34,20 @@ class RegressorFeature(Feature):
 
 
 # each feature lives in a FeatureConfig ----------
-class FeatureConfig(BaseModel, validate_assignment=True):
-    name: str
-    features: list[Feature] = []
+class FeatureFamily(BaseModel, validate_assignment=True):
+    features: dict[str, Feature] = {}
 
     def get_cols(self):
-        return [feature.col_name for feature in self.features]
+        return [col_name for col_name in self.features.keys()]
 
 
-class RegressorFeatureConfig(FeatureConfig):
-    name: str
+class RegressorFamily(FeatureFamily):
     regressor_type: Literal["seasonal", "extra_regressor", "holiday"]
     mode: Literal["additive", "multiplicative"]
-    features: list[RegressorFeature] = []
+    features: dict[str, RegressorFeature] = {}
 
 
-class SeasonalityConfig(RegressorFeatureConfig):
+class SeasonalityFamily(RegressorFamily):
     regressor_type: Literal["seasonal"] = "seasonal"
     period: float = Field(gt=0)
     fourier_order: int = Field(gt=0)
@@ -54,15 +55,15 @@ class SeasonalityConfig(RegressorFeatureConfig):
 
 # each FeatureConfig lives in ModelSpecification ----------
 class ModelSpecification(BaseModel, validate_assignment=True):
-    feature_configs: list[FeatureConfig]
-    regressor_configs: list[RegressorFeatureConfig]
-    seasonality_configs: list[SeasonalityConfig]
+    feature_families: dict[str, FeatureFamily] = {}
+    regressor_families: dict[str, RegressorFamily] = {}
+    seasonality_families: dict[str, SeasonalityFamily] = {}
 
     def get_feature_cols(self):
-        return [col for f_cols in [f_cfg.get_cols() for f_cfg in self.feature_configs] for col in f_cols]
+        return [col for f_cols in [f_fam.get_cols() for f_fam in self.feature_families.values()] for col in f_cols]
 
     def get_regressor_cols(self):
-        return [col for f_cols in [f_cfg.get_cols() for f_cfg in self.regressor_configs] for col in f_cols]
+        return [col for f_cols in [f_fam.get_cols() for f_fam in self.regressor_families.values()] for col in f_cols]
 
     def get_seasonality_cols(self):
-        return [col for f_cols in [f_cfg.get_cols() for f_cfg in self.seasonality_configs] for col in f_cols]
+        return [col for f_cols in [f_fam.get_cols() for f_fam in self.seasonality_families.values()] for col in f_cols]
