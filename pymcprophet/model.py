@@ -25,21 +25,28 @@ class BayesTSConfig(BaseModel):
 
 class ModelCol(BaseModel):
     name: str
+
+class ModelFeature(ModelCol):
     mode: Literal["additive", "multiplicative"]
 
 
-class SeasonalityTermConfig(ModelCol):
+class SeasonalityTermConfig(ModelFeature):
     period: float = Field(gt=0)
     fourier_order: int = Field(gt=0)
 
 
 class BayesTS:
-    def __init__(self, config: BayesTSConfig):
+    def __init__(self, config: BayesTSConfig, model_state=None):
         self.config = config
 
-        self.logisitc_terms = []
-        self.regressors: list[ModelCol] = []
+        self.regressors: list[ModelFeature] = []
         self.seasonalities: list[SeasonalityTermConfig] = []
+
+        self.logisitc_terms = []
+        if self.config.growth == "logisitc":
+            self.logisitc_terms.append("cap")
+            if self.config.logistic_floor:
+                self.logisitc_terms.append("floor")
 
         self.data_assigned = False
         self.y_scales_set = False
@@ -59,13 +66,8 @@ class BayesTS:
         if self.data_assigned:
             ValueError("Data already assigned to model")
 
-        if self.config.growth == "logisitc":
-            self.logisitc_terms.append("cap")
-            if self.config.logistic_floor:
-                self.logisitc_terms.append("floor")
-
-        self.regressors.extend([ModelCol(name=reg, mode="additive") for reg in additive_regressors])
-        self.regressors.extend([ModelCol(name=reg, mode="multiplicative") for reg in multiplicative_regressors])
+        self.regressors.extend([ModelFeature(name=reg, mode="additive") for reg in additive_regressors])
+        self.regressors.extend([ModelFeature(name=reg, mode="multiplicative") for reg in multiplicative_regressors])
 
         self.validate_input_matrix(df)
 
@@ -82,31 +84,27 @@ class BayesTS:
         Of the seasonalities with config set to auto, determine which are eligible.
         Mimics the same criteria that Prophet uses.
         """
-        # force through the manually turned on seasnalities
-        if self.config.daily_seasonality == "enabled":
-            self.add_daily_seasonality()
-
-        if self.config.weekly_seasonality == "enabled":
-            self.add_weekly_seasonality()
-
-        if self.config.yearly_seasonality == "enabled":
-            self.add_yearly_seasonality()
 
         range = self.raw_model_df["ds"].max() - self.raw_model_df["ds"].min()
         dt = self.raw_model_df["ds"].diff()
         min_dt = dt.iloc[dt.values.nonzero()[0]].min()
 
         # yearly if therea are >= 2 years of history
-        if self.config.yearly_seasonality == "auto" and range >= pd.Timedelta(days=730):
+        if (self.config.yearly_seasonality == "auto" and range >= pd.Timedelta(days=730)) or (
+            self.config.yearly_seasonality == "enabled"
+        ):
             self.add_yearly_seasonality()
 
         # weekly if there are >= 2 weeks of history and there exists spacing < 7 days
-        if self.config.weekly_seasonality == "auto" and (range >= pd.Timedelta(weeks=2) and min_dt < pd.Timedelta(weeks=1)):
+        if (self.config.weekly_seasonality == "auto" and range >= pd.Timedelta(weeks=2) and min_dt < pd.Timedelta(weeks=1)) or (
+            self.config.weekly_seasonality == "enabled"
+        ):
             self.add_weekly_seasonality()
 
         # daily if there are >= 2 days of history and there exists spacing < 1 day
-        if self.config.daily_seasonality == "auto" and (range >= pd.Timedelta(days=2) and min_dt < pd.Timedelta(days=1)):
-            print(min_dt)
+        if (self.config.daily_seasonality == "auto" and range >= pd.Timedelta(days=2) and min_dt < pd.Timedelta(days=1)) or (
+            self.config.daily_seasonality == "enabled"
+        ):
             self.add_daily_seasonality()
 
     def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
@@ -236,10 +234,14 @@ class BayesTS:
 
         self.y_scales_set = True
 
-    def get_all_model_cols(self, by_type=False):
-        # there are input cols and processed seasonality cols
-        cols_by_type = self.get_input_model_cols(by_type=True)
-        cols_by_type.update({"seasonalities": self.get_all_seasonality_col_names()})
+    def get_model_cols(self, by_type=False, input_only=False):
+        # there are input cols and generated cols
+        cols_by_type = {"fundamental": ["ds", "y"]}
+        cols_by_type.update({"logistic": self.logisitc_terms})
+        cols_by_type.update({"regressors": [r.name for r in self.regressors]})
+        # columns that are not required as model input, they are generated
+        if not input_only:
+            cols_by_type.update({"seasonalities": self.get_all_seasonality_col_names()})
 
         if by_type:
             return cols_by_type
@@ -247,11 +249,4 @@ class BayesTS:
             return [col_name for col_list in cols_by_type.values() for col_name in col_list]
 
     def get_input_model_cols(self, by_type=False):
-        cols_by_type = {"fundamental": ["ds", "y"]}
-        cols_by_type.update({"logistic": self.logisitc_terms})
-        cols_by_type.update({"regressors": [r.name for r in self.regressors]})
-
-        if by_type:
-            return cols_by_type
-        else:
-            return [col_name for col_list in cols_by_type.values() for col_name in col_list]
+        return self.get_model_cols(by_type=by_type, input_only=True)
