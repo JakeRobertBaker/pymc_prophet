@@ -23,10 +23,8 @@ class BayesTSConfig(BaseModel):
         return v
 
 
-class ModelCol(BaseModel):
+class ModelFeature(BaseModel):
     name: str
-
-class ModelFeature(ModelCol):
     mode: Literal["additive", "multiplicative"]
 
 
@@ -36,7 +34,7 @@ class SeasonalityTermConfig(ModelFeature):
 
 
 class BayesTS:
-    def __init__(self, config: BayesTSConfig, model_state=None):
+    def __init__(self, config: BayesTSConfig):
         self.config = config
 
         self.regressors: list[ModelFeature] = []
