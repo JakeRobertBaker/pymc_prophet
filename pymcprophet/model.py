@@ -3,48 +3,31 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 import numpy as np
 
-from pydantic import BaseModel, Field, field_validator
 
-
-class BayesTSConfig(BaseModel):
-    growth: Literal["linear", "logistic", "flat"] = "linear"
-    y_scale_type: Literal["absmax", "minmax"] = "absmax"
-    logistic_floor: bool = False
-    daily_seasonality: Literal["enabled", "disabled", "auto"] = "auto"
-    weekly_seasonality: Literal["enabled", "disabled", "auto"] = "auto"
-    yearly_seasonality: Literal["enabled", "disabled", "auto"] = "auto"
-    seasonality_prior_scale: float = Field(10.0, gt=0)
-    seasonality_mode: Literal["additive", "multiplicative"] = "additive"
-
-    @field_validator("logistic_floor")
-    def check_logistic_floor(cls, v, values):
-        if v and values.get("growth") != "logistic":
-            raise ValueError("logistic_floor=True requires growth='logistic'")
-        return v
-
-
-class ModelFeature(BaseModel):
-    name: str
-    mode: Literal["additive", "multiplicative"]
-
-
-class SeasonalityTermConfig(ModelFeature):
-    period: float = Field(gt=0)
-    fourier_order: int = Field(gt=0)
+from pymcprophet.model_templates import (
+    BayesTSConfig,
+    Feature,
+    RegressorFeature,
+    FeatureConfig,
+    RegressorFeatureConfig,
+    SeasonalityConfig,
+    ModelSpecification,
+)
 
 
 class BayesTS:
     def __init__(self, config: BayesTSConfig):
         self.config = config
 
-        self.regressors: list[ModelFeature] = []
-        self.seasonalities: list[SeasonalityTermConfig] = []
+        self.model_spec = ModelSpecification(feature_configs=[], regressor_configs=[], seasonality_configs=[])
 
-        self.logisitc_terms = []
-        if self.config.growth == "logisitc":
-            self.logisitc_terms.append("cap")
-            if self.config.logistic_floor:
-                self.logisitc_terms.append("floor")
+        logisitc_cfg = FeatureConfig(name="logistic", features=[])
+        if config.growth == "logisitc":
+            logisitc_cfg.features += [Feature(col_name="cap")]
+            if config.floor_logistic:
+                logisitc_cfg.features += [Feature(col_name="floor")]
+
+        self.model_spec.feature_configs += [logisitc_cfg]
 
         self.data_assigned = False
         self.y_scales_set = False
@@ -64,8 +47,23 @@ class BayesTS:
         if self.data_assigned:
             ValueError("Data already assigned to model")
 
-        self.regressors.extend([ModelFeature(name=reg, mode="additive") for reg in additive_regressors])
-        self.regressors.extend([ModelFeature(name=reg, mode="multiplicative") for reg in multiplicative_regressors])
+        self.model_spec.regressor_configs += [
+            RegressorFeatureConfig(
+                name="additive_regressors",
+                regressor_type="extra_regressor",
+                mode="additive",
+                features=[RegressorFeature(col_name=reg) for reg in additive_regressors],
+            )
+        ]
+
+        self.model_spec.regressor_configs += [
+            RegressorFeatureConfig(
+                name="multiplicative_regressors",
+                regressor_type="extra_regressor",
+                mode="multiplicative",
+                features=[RegressorFeature(col_name=reg) for reg in multiplicative_regressors],
+            )
+        ]
 
         self.validate_input_matrix(df)
 
@@ -106,10 +104,12 @@ class BayesTS:
             self.add_daily_seasonality()
 
     def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
-        if name in [term.name for term in self.seasonalities]:
+        if name in [s_cfg.name for s_cfg in self.model_spec.seasonality_configs]:
             raise ValueError(f"Seasonality term '{name}' already exists.")
 
-        self.seasonalities.append(SeasonalityTermConfig(name=name, period=period, fourier_order=fourier_order, mode=mode))
+        self.model_spec.seasonality_configs += [
+            SeasonalityConfig(name=name, mode=mode, period=period, fourier_order=fourier_order)
+        ]
 
     def add_daily_seasonality(self, fourier_order: int = 4):
         self.add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
@@ -158,42 +158,31 @@ class BayesTS:
         df["t_seasonality"] = dates
 
         # add seasonality cols
-        for term in self.seasonalities:
+        for term in self.model_spec.seasonality_configs:
+            # calculate terms
             n_vals = np.arange(1, term.fourier_order + 1)
             t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / term.period)  # shape (fourier_order, T)
-
-            sin_col_names, cos_col_names = self._get_seasonality_term_col_names(term)
-
             sin_terms = np.sin(t)  # shape (fourier_order, T)
-            sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
-
             cos_terms = np.cos(t)  # shape (fourier_order, T)
+
+            # create names in the same order
+            sin_col_names = [f"{term.name}_sin_{n}" for n in n_vals]
+            cos_col_names = [f"{term.name}_cos_{n}" for n in n_vals]
+            # vital we update term as we go
+            term.features += [RegressorFeature(col_name=name) for name in sin_col_names + cos_col_names]
+
+            sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
 
             df = pd.concat([df, sin_df, cos_df], axis=1)
 
         return df
 
-    def _get_seasonality_term_col_names(self, term: SeasonalityTermConfig):
-        """
-        Get the col names of the seasonality term
-        """
-        n_vals = np.arange(1, term.fourier_order + 1)
-        sin_col_names = [f"{term.name}_sin_{n}" for n in n_vals]
-        cos_col_names = [f"{term.name}_cos_{n}" for n in n_vals]
-        return sin_col_names, cos_col_names
-
-    def get_seasonality_term_col_names(self, term: SeasonalityTermConfig) -> list[str]:
-        sin_col_names, cos_col_names = self._get_seasonality_term_col_names(term)
-        col_names = sin_col_names + cos_col_names
-        return col_names
+    def get_seasonality_term_col_names(self, term: SeasonalityConfig):
+        return term.get_cols()
 
     def get_all_seasonality_col_names(self):
-        return [
-            col_name
-            for col_names in [self.get_seasonality_term_col_names(term) for term in self.seasonalities]
-            for col_name in col_names
-        ]
+        return self.model_spec.get_seasonality_cols()
 
     def transform_y(self, df: pd.DataFrame):
         """
@@ -203,7 +192,7 @@ class BayesTS:
         if not self.y_scales_set:
             raise ValueError("Need to assign data to the model to set transform parms.")
 
-        if self.config.logistic_floor:
+        if self.config.floor_logistic:
             shift = df["floor"]
         else:
             shift = 0 if self.config.y_scale_type == "absmax" else self.raw_model_df["y"].min()
@@ -219,13 +208,13 @@ class BayesTS:
         """
 
         if self.config.y_scale_type == "absmax":
-            if self.config.logistic_floor:
+            if self.config.floor_logistic:
                 self.scale = (self.raw_model_df["y"] - self.raw_model_df["floor"]).abs().max()
             else:
                 self.scale = self.raw_model_df["y"].abs().max()
 
         if self.config.y_scale_type == "minmax":
-            if self.config.logistic_floor:
+            if self.config.floor_logistic:
                 self.scale = self.raw_model_df["cap"].max() - self.raw_model_df["floor"].min()
             else:
                 self.scale = self.raw_model_df["y"].max() - self.raw_model_df["y"].min()
@@ -235,11 +224,13 @@ class BayesTS:
     def get_model_cols(self, by_type=False, input_only=False):
         # there are input cols and generated cols
         cols_by_type = {"fundamental": ["ds", "y"]}
-        cols_by_type.update({"logistic": self.logisitc_terms})
-        cols_by_type.update({"regressors": [r.name for r in self.regressors]})
+
+        cols_by_type.update({"logistic": self.model_spec.get_feature_cols()})
+        cols_by_type.update({"regressors": self.model_spec.get_regressor_cols()})
+
         # columns that are not required as model input, they are generated
         if not input_only:
-            cols_by_type.update({"seasonalities": self.get_all_seasonality_col_names()})
+            cols_by_type.update({"seasonalities": self.model_spec.get_seasonality_cols()})
 
         if by_type:
             return cols_by_type
