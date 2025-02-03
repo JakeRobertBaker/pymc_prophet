@@ -1,4 +1,3 @@
-from idna import valid_contextj
 from pydantic import BaseModel, Field
 from typing import Literal
 
@@ -28,6 +27,7 @@ class RegressorFeature(Feature):
 # each feature lives in a FeatureFamily ----------
 class FeatureFamily(BaseModel, validate_assignment=True):
     features: dict[str, Feature] = {}
+    family_type: Literal["feature"] = "feature"
 
     def get_cols(self):
         return [col_name for col_name in self.features.keys()]
@@ -36,50 +36,48 @@ class FeatureFamily(BaseModel, validate_assignment=True):
         self.features = self.features | {feature_name: feature}
 
 
-class RegressorFamily(FeatureFamily):
-    regressor_type: Literal["seasonal", "extra_regressor", "holiday"]
+class _RegressorFamily(FeatureFamily):
     mode: Literal["additive", "multiplicative"]
-    features: dict[str, RegressorFeature] = {}
 
 
-class SeasonalityFamily(RegressorFamily):
-    regressor_type: Literal["seasonal"] = "seasonal"
+class RegressorFamily(_RegressorFamily):
+    family_type: Literal["regressor"] = "regressor"
+    regressor_type: Literal["seasonal", "extra_regressor", "holiday"]
+
+
+class SeasonalityFamily(_RegressorFamily):
+    family_type: Literal["seasonal"] = "seasonal"
+    seasonality_type: Literal["standard", "custom"] = "standard"
     period: float = Field(gt=0)
     fourier_order: int = Field(gt=0)
 
 
 # each FeatureFamily lives in ModelSpecification ----------
 class ModelSpecification(BaseModel, validate_assignment=True):
-    feature_families: dict[str, FeatureFamily] = {}
-    regressor_families: dict[str, RegressorFamily] = {}
-    seasonality_families: dict[str, SeasonalityFamily] = {}
+    feature_families: dict[str, FeatureFamily | RegressorFamily | SeasonalityFamily] = {}
 
-    def add_family(
-        self, family_type: Literal["feature", "regressor", "seasonal"], family_name: str, feature_family: FeatureFamily
-    ):
-        if family_type == "feature":
-            self.feature_families = self.feature_families | {family_name: feature_family}
-        elif family_type == "regressor":
-            self.regressor_families = self.regressor_families | {family_name: feature_family}
-        elif family_type == "seasonal":
-            self.seasonality_families = self.seasonality_families | {family_name: feature_family}
-        else:
-            raise ValueError('family type must be in "feature", "regressor", "seasonal"')
+    def add_family(self, family_name: str, feature_family: FeatureFamily):
+        if family_name in self.feature_families.keys():
+            raise ValueError(f"A feature family of name {family_name} has already been added.")
+        self.feature_families = self.feature_families | {family_name: feature_family}
 
-    def add_feature_family(self, family_name: str, feature_family: FeatureFamily):
-        self.add_family(family_type="feature", family_name=family_name, feature_family=feature_family)
-
-    def add_regressor_family(self, family_name: str, feature_family: FeatureFamily):
-        self.add_family(family_type="regressor", family_name=family_name, feature_family=feature_family)
-
-    def add_seasonal_family(self, family_name: str, feature_family: FeatureFamily):
-        self.add_family(family_type="seasonal", family_name=family_name, feature_family=feature_family)
+    def _get_feature_cols(self, family_types_filter: list[str] = ["seasonal", "regressor", "feature"]):
+        return [
+            col
+            for f_cols in [
+                f_fam.get_cols() for f_fam in self.feature_families.values() if f_fam.family_type in family_types_filter
+            ]
+            for col in f_cols
+        ]
 
     def get_feature_cols(self):
-        return [col for f_cols in [f_fam.get_cols() for f_fam in self.feature_families.values()] for col in f_cols]
+        return self._get_feature_cols(family_types_filter=["feature"])
 
     def get_regressor_cols(self):
-        return [col for f_cols in [f_fam.get_cols() for f_fam in self.regressor_families.values()] for col in f_cols]
+        return self._get_feature_cols(family_types_filter=["regressor"])
 
     def get_seasonality_cols(self):
-        return [col for f_cols in [f_fam.get_cols() for f_fam in self.seasonality_families.values()] for col in f_cols]
+        return self._get_feature_cols(family_types_filter=["seasonal"])
+
+    def get_seasonal_families(self):
+        return {k: v for k, v in self.feature_families.items() if v.family_type == "seasonal"}

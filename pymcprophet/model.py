@@ -25,7 +25,7 @@ class BayesTS:
             if config.floor_logistic:
                 logisitc_fam.add_feature(feature_name="floor", feature=Feature())
 
-            self.model_spec.add_feature_family("logistic", logisitc_fam)
+            self.model_spec.add_family("logistic", logisitc_fam)
 
         self.data_assigned = False
         self.y_scales_set = False
@@ -50,14 +50,14 @@ class BayesTS:
             mode="additive",
             features={reg: RegressorFeature() for reg in additive_regressors},
         )
-        self.model_spec.add_regressor_family("additive_regressors", additive_regressor_family)
+        self.model_spec.add_family("additive_regressors", additive_regressor_family)
 
         multiplicative_regressor_family = RegressorFamily(
             regressor_type="extra_regressor",
             mode="additive",
             features={reg: RegressorFeature() for reg in additive_regressors},
         )
-        self.model_spec.add_regressor_family("multiplicative_regressors", multiplicative_regressor_family)
+        self.model_spec.add_family("multiplicative_regressors", multiplicative_regressor_family)
 
         self.validate_input_matrix(df)
 
@@ -97,21 +97,29 @@ class BayesTS:
         ):
             self.add_daily_seasonality()
 
-    def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
-        # TODO move this validation in to the template
-        if name in [s_fam_name for s_fam_name in self.model_spec.seasonality_families.keys()]:
-            raise ValueError(f"Seasonality term '{name}' already exists.")
-
-        self.model_spec.add_seasonal_family(name, SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order))
+    def _add_seasonality(
+        self,
+        name: str,
+        period: float,
+        fourier_order: int,
+        mode: Literal["additive", "multiplicative"],
+        seasonality_type: Literal["standard", "custom"] = "standard",
+    ):
+        self.model_spec.add_family(
+            name, SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order, seasonality_type=seasonality_type)
+        )
 
     def add_daily_seasonality(self, fourier_order: int = 4):
-        self.add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self._add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def add_weekly_seasonality(self, fourier_order: int = 3):
-        self.add_seasonality("weekly", period=7, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self._add_seasonality("weekly", period=7, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def add_yearly_seasonality(self, fourier_order: int = 10):
-        self.add_seasonality("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self._add_seasonality("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+
+    def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
+        self._add_seasonality(name=name, period=period, fourier_order=fourier_order, mode=mode, seasonality_type="custom")
 
     def validate_input_matrix(self, df: pd.DataFrame):
         """
@@ -150,20 +158,19 @@ class BayesTS:
         dates = df["ds"].to_numpy(dtype=np.int64) / day_to_nanosec
         df["t_seasonality"] = dates
 
-        # add seasonality cols
-        for s_fam_name, term in self.model_spec.seasonality_families.items():
+        for family_name, seasonality_family in self.model_spec.get_seasonal_families().items():
             # calculate terms
-            n_vals = np.arange(1, term.fourier_order + 1)
-            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / term.period)  # shape (fourier_order, T)
+            n_vals = np.arange(1, seasonality_family.fourier_order + 1)
+            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / seasonality_family.period)
             sin_terms = np.sin(t)  # shape (fourier_order, T)
             cos_terms = np.cos(t)  # shape (fourier_order, T)
 
             # create names in the same order
-            sin_col_names = [f"{s_fam_name}_sin_{n}" for n in n_vals]
-            cos_col_names = [f"{s_fam_name}_cos_{n}" for n in n_vals]
+            sin_col_names = [f"{family_name}_sin_{n}" for n in n_vals]
+            cos_col_names = [f"{family_name}_cos_{n}" for n in n_vals]
             # vital we update term as we go
             for name in sin_col_names + cos_col_names:
-                term.add_feature(name, RegressorFeature(feature_origin="generated"))
+                seasonality_family.add_feature(name, RegressorFeature(feature_origin="generated"))
 
             sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
