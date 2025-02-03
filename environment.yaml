@@ -5,6 +5,7 @@ dependencies:
   - nutpie
   - pymc
   - numba
+  - pydantic
   - jupyter
   - pip
   - pip:

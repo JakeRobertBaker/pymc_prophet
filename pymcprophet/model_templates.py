@@ -1,4 +1,5 @@
-from pydantic import BaseModel, Field, field_validator
+from idna import valid_contextj
+from pydantic import BaseModel, Field
 from typing import Literal
 
 
@@ -12,19 +13,10 @@ class BayesTSConfig(BaseModel):
     seasonality_prior_scale: float = Field(10.0, gt=0)
     seasonality_mode: Literal["additive", "multiplicative"] = "additive"
 
-    @field_validator("floor_logistic")
-    def check_floor_logistic(cls, v, values):
-        if v and values.get("growth") != "logistic":
-            raise ValueError("floor_logistic=True requires growth='logistic'")
-        return v
-
-
-# TODO rarefactor into keyed lists
-
 
 # an individual feature ----------
 class Feature(BaseModel, validate_assignment=True):
-    pass
+    feature_origin: Literal["input", "generated"] = "input"
 
 
 class RegressorFeature(Feature):
@@ -33,12 +25,15 @@ class RegressorFeature(Feature):
     posterior_stats: dict | None = None
 
 
-# each feature lives in a FeatureConfig ----------
+# each feature lives in a FeatureFamily ----------
 class FeatureFamily(BaseModel, validate_assignment=True):
     features: dict[str, Feature] = {}
 
     def get_cols(self):
         return [col_name for col_name in self.features.keys()]
+
+    def add_feature(self, feature_name: str, feature: Feature):
+        self.features = self.features | {feature_name: feature}
 
 
 class RegressorFamily(FeatureFamily):
@@ -53,11 +48,32 @@ class SeasonalityFamily(RegressorFamily):
     fourier_order: int = Field(gt=0)
 
 
-# each FeatureConfig lives in ModelSpecification ----------
+# each FeatureFamily lives in ModelSpecification ----------
 class ModelSpecification(BaseModel, validate_assignment=True):
     feature_families: dict[str, FeatureFamily] = {}
     regressor_families: dict[str, RegressorFamily] = {}
     seasonality_families: dict[str, SeasonalityFamily] = {}
+
+    def add_family(
+        self, family_type: Literal["feature", "regressor", "seasonal"], family_name: str, feature_family: FeatureFamily
+    ):
+        if family_type == "feature":
+            self.feature_families = self.feature_families | {family_name: feature_family}
+        elif family_type == "regressor":
+            self.regressor_families = self.regressor_families | {family_name: feature_family}
+        elif family_type == "seasonal":
+            self.seasonality_families = self.seasonality_families | {family_name: feature_family}
+        else:
+            raise ValueError('family type must be in "feature", "regressor", "seasonal"')
+
+    def add_feature_family(self, family_name: str, feature_family: FeatureFamily):
+        self.add_family(family_type="feature", family_name=family_name, feature_family=feature_family)
+
+    def add_regressor_family(self, family_name: str, feature_family: FeatureFamily):
+        self.add_family(family_type="regressor", family_name=family_name, feature_family=feature_family)
+
+    def add_seasonal_family(self, family_name: str, feature_family: FeatureFamily):
+        self.add_family(family_type="seasonal", family_name=family_name, feature_family=feature_family)
 
     def get_feature_cols(self):
         return [col for f_cols in [f_fam.get_cols() for f_fam in self.feature_families.values()] for col in f_cols]

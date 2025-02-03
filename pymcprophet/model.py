@@ -18,17 +18,14 @@ from pymcprophet.model_templates import (
 class BayesTS:
     def __init__(self, config: BayesTSConfig):
         self.config = config
+        self.model_spec = ModelSpecification()
 
-        self.model_spec = ModelSpecification(feature_configs=[], regressor_configs=[], seasonality_configs=[])
-
-        logisitc_fam = FeatureFamily()
-        if config.growth == "logisitc":
-            logisitc_fam.features["cap"] = Feature()
+        if config.growth == "logistic":
+            logisitc_fam = FeatureFamily(features={"cap": Feature()})
             if config.floor_logistic:
-                logisitc_fam.features["cap"] = Feature()
+                logisitc_fam.add_feature(feature_name="floor", feature=Feature())
 
-        # careful - this is the only way to do assignment extend of dict
-        self.model_spec.feature_families = self.model_spec.feature_families | {"logisitc": logisitc_fam}
+            self.model_spec.add_feature_family("logistic", logisitc_fam)
 
         self.data_assigned = False
         self.y_scales_set = False
@@ -48,17 +45,19 @@ class BayesTS:
         if self.data_assigned:
             ValueError("Data already assigned to model")
 
-        self.model_spec.regressor_families["additive_regressors"] = RegressorFamily(
+        additive_regressor_family = RegressorFamily(
             regressor_type="extra_regressor",
             mode="additive",
             features={reg: RegressorFeature() for reg in additive_regressors},
         )
+        self.model_spec.add_regressor_family("additive_regressors", additive_regressor_family)
 
-        self.model_spec.regressor_families["multiplicative_regressors"] = RegressorFamily(
+        multiplicative_regressor_family = RegressorFamily(
             regressor_type="extra_regressor",
-            mode="multiplicative",
-            features={reg: RegressorFeature() for reg in multiplicative_regressors},
+            mode="additive",
+            features={reg: RegressorFeature() for reg in additive_regressors},
         )
+        self.model_spec.add_regressor_family("multiplicative_regressors", multiplicative_regressor_family)
 
         self.validate_input_matrix(df)
 
@@ -99,10 +98,11 @@ class BayesTS:
             self.add_daily_seasonality()
 
     def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
+        # TODO move this validation in to the template
         if name in [s_fam_name for s_fam_name in self.model_spec.seasonality_families.keys()]:
             raise ValueError(f"Seasonality term '{name}' already exists.")
 
-        self.model_spec.seasonality_families[name] = SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order)
+        self.model_spec.add_seasonal_family(name, SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order))
 
     def add_daily_seasonality(self, fourier_order: int = 4):
         self.add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
@@ -162,11 +162,11 @@ class BayesTS:
             sin_col_names = [f"{s_fam_name}_sin_{n}" for n in n_vals]
             cos_col_names = [f"{s_fam_name}_cos_{n}" for n in n_vals]
             # vital we update term as we go
-            term.features = term.features | {name: RegressorFeature() for name in sin_col_names + cos_col_names}
+            for name in sin_col_names + cos_col_names:
+                term.add_feature(name, RegressorFeature(feature_origin="generated"))
 
             sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
-
             df = pd.concat([df, sin_df, cos_df], axis=1)
 
         return df
