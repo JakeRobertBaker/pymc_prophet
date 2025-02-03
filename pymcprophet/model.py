@@ -41,7 +41,6 @@ class BayesTS:
         This is done once per model.
         Assigns things like scale params.
         """
-
         if self.data_assigned:
             ValueError("Data already assigned to model")
 
@@ -62,7 +61,7 @@ class BayesTS:
         self.validate_input_matrix(df)
 
         self.raw_model_df = df[self.get_input_model_cols()]
-        self.set_y_scale()
+        self._set_y_scale()
         self.determine_seasonalities()
 
         # use class information to produce the model matrix
@@ -97,41 +96,36 @@ class BayesTS:
         ):
             self.add_daily_seasonality()
 
-    def _add_seasonality(
-        self,
-        name: str,
-        period: float,
-        fourier_order: int,
-        mode: Literal["additive", "multiplicative"],
-        seasonality_type: Literal["standard", "custom"] = "standard",
-    ):
-        self.model_spec.add_family(
-            name, SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order, seasonality_type=seasonality_type)
-        )
+    def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
+        if self.data_assigned:
+            raise ValueError("We do not support adding seasonalities after data is assigned. Do that before.")
+        self.model_spec.add_family(name, SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order))
 
     def add_daily_seasonality(self, fourier_order: int = 4):
-        self._add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self.add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def add_weekly_seasonality(self, fourier_order: int = 3):
-        self._add_seasonality("weekly", period=7, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self.add_seasonality("weekly", period=7, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def add_yearly_seasonality(self, fourier_order: int = 10):
-        self._add_seasonality("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
-
-    def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
-        self._add_seasonality(name=name, period=period, fourier_order=fourier_order, mode=mode, seasonality_type="custom")
+        self.add_seasonality("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def validate_input_matrix(self, df: pd.DataFrame):
         """
         Validate that neccessary input cols and types are present.
         Derived cols such as seasonality are not required.
         """
-        missing_cols = [
-            f"missing {col_type}: {col} "
-            for col_type, col_list in self.get_input_model_cols(by_type=True).items()
-            for col in col_list
-            if col not in df.columns
-        ]
+        missing_cols = []
+        if "y" not in df.columns:
+            missing_cols.append("y the indep var")
+        if "ds" not in df.columns:
+            missing_cols.append("ds the time var")
+
+        for family_name, feature_family in self.model_spec.feature_families.items():
+            for input_feature_name in feature_family.get_input_feature_cols():
+                if input_feature_name not in df.columns:
+                    missing_cols.append((f"{input_feature_name} from {family_name} family of type {feature_family.family_type}"))
+
         if missing_cols:
             raise ValueError(f"Required cols missing,\n\t{', '.join(missing_cols)}")
 
@@ -168,9 +162,11 @@ class BayesTS:
             # create names in the same order
             sin_col_names = [f"{family_name}_sin_{n}" for n in n_vals]
             cos_col_names = [f"{family_name}_cos_{n}" for n in n_vals]
-            # vital we update term as we go
-            for name in sin_col_names + cos_col_names:
-                seasonality_family.add_feature(name, RegressorFeature(feature_origin="generated"))
+
+            # When we do this for the first time ass these created cols to the model spec
+            if not self.data_assigned:
+                for name in sin_col_names + cos_col_names:
+                    seasonality_family.add_feature(name, RegressorFeature(feature_origin="generated"))
 
             sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
@@ -178,19 +174,15 @@ class BayesTS:
 
         return df
 
-    def get_seasonality_term_col_names(self, term: SeasonalityFamily):
-        return term.get_cols()
-
-    def get_all_seasonality_col_names(self):
-        return self.model_spec.get_seasonality_cols()
-
-    def transform_y(self, df: pd.DataFrame):
+    def transform_y(self, input_df: pd.DataFrame) -> pd.DataFrame:
         """
         Apply affine transform:
             y(t) ->  ( y(t) - shift(t) ) / scale
         """
         if not self.y_scales_set:
             raise ValueError("Need to assign data to the model to set transform parms.")
+
+        df = input_df.copy()
 
         if self.config.floor_logistic:
             shift = df["floor"]
@@ -201,11 +193,13 @@ class BayesTS:
 
         return df
 
-    def set_y_scale(self):
+    def _set_y_scale(self):
         """
         Set the scale term in transform:
             y(t) ->  ( y(t) - shift(t) ) / scale
         """
+        if self.y_scales_set:
+            raise ValueError("y scale already set")
 
         if self.config.y_scale_type == "absmax":
             if self.config.floor_logistic:
@@ -221,21 +215,8 @@ class BayesTS:
 
         self.y_scales_set = True
 
-    def get_model_cols(self, by_type=False, input_only=False):
-        # there are input cols and generated cols
-        cols_by_type = {"fundamental": ["ds", "y"]}
-
-        cols_by_type.update({"logistic": self.model_spec.get_feature_cols()})
-        cols_by_type.update({"regressors": self.model_spec.get_regressor_cols()})
-
-        # columns that are not required as model input, they are generated
-        if not input_only:
-            cols_by_type.update({"seasonalities": self.model_spec.get_seasonality_cols()})
-
-        if by_type:
-            return cols_by_type
-        else:
-            return [col_name for col_list in cols_by_type.values() for col_name in col_list]
-
-    def get_input_model_cols(self, by_type=False):
-        return self.get_model_cols(by_type=by_type, input_only=True)
+    def get_input_model_cols(self) -> list[str]:
+        """
+        Generate a list of column names required in input matrix.
+        """
+        return ["ds", "y"] + self.model_spec.get_input_feature_cols()

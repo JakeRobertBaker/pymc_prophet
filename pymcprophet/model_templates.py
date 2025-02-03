@@ -30,9 +30,14 @@ class FeatureFamily(BaseModel, validate_assignment=True):
     family_type: Literal["feature"] = "feature"
 
     def get_cols(self):
-        return [col_name for col_name in self.features.keys()]
+        return [feature_name for feature_name in self.features.keys()]
+
+    def get_input_feature_cols(self):
+        return [feature_name for feature_name, feature in self.features.items() if feature.feature_origin == "input"]
 
     def add_feature(self, feature_name: str, feature: Feature):
+        if feature_name in self.features.keys():
+            raise ValueError(f"A feature of of name {feature_name} has already been added to this family.")
         self.features = self.features | {feature_name: feature}
 
 
@@ -47,7 +52,6 @@ class RegressorFamily(_RegressorFamily):
 
 class SeasonalityFamily(_RegressorFamily):
     family_type: Literal["seasonal"] = "seasonal"
-    seasonality_type: Literal["standard", "custom"] = "standard"
     period: float = Field(gt=0)
     fourier_order: int = Field(gt=0)
 
@@ -61,14 +65,22 @@ class ModelSpecification(BaseModel, validate_assignment=True):
             raise ValueError(f"A feature family of name {family_name} has already been added.")
         self.feature_families = self.feature_families | {family_name: feature_family}
 
-    def _get_feature_cols(self, family_types_filter: list[str] = ["seasonal", "regressor", "feature"]):
-        return [
-            col
-            for f_cols in [
-                f_fam.get_cols() for f_fam in self.feature_families.values() if f_fam.family_type in family_types_filter
-            ]
-            for col in f_cols
-        ]
+    def _get_feature_cols(
+        self,
+        family_types_filter: list[str] = ["seasonal", "regressor", "feature"],
+        feature_origin_filter: list[str] = ["input", "generated"],
+    ):
+        cols = []
+        for family_name, feature_family in self.feature_families.items():
+            if feature_family.family_type in family_types_filter:
+                for feature_name, feature in feature_family.features.items():
+                    if feature.feature_origin in feature_origin_filter:
+                        cols.append(feature_name)
+
+        return cols
+    
+    def get_input_feature_cols(self):
+        return self._get_feature_cols(feature_origin_filter=["input"])
 
     def get_feature_cols(self):
         return self._get_feature_cols(family_types_filter=["feature"])
