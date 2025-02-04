@@ -16,6 +16,12 @@ Conda
 ```
 mamba env create -f environment.yaml
 ```
+
+Created txt file via 
+```
+pip list --format=freeze > requirements.txt
+```
+
 ## TODO
 - Unit tests with data comparable to Prophet
 
