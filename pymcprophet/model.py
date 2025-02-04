@@ -2,14 +2,9 @@ from typing import Literal
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 import numpy as np
+from torch import normal
 
-from pymcprophet.model_templates import (
-    BayesTSConfig,
-    Feature,
-    RegressorFeature,
-    ModelSpecification,
-    SeasonalityFeature,
-)
+from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, ModelSpecification, SeasonalityFeature, Distribution
 
 
 class BayesTS:
@@ -26,6 +21,9 @@ class BayesTS:
         self.y_scales_set = False
         self.seasonality_families = {}
 
+    def add_regressor(self):
+        pass
+
     def assign_model_matrix(
         self,
         df: pd.DataFrame,
@@ -39,12 +37,20 @@ class BayesTS:
         """
         if self.data_assigned:
             raise ValueError("Data already assigned to model")
+        
+        # TODO rarefactor to add regressor of desired prior
+
+        regressor_prior = Distribution(kind="normal", params={"mu": 0, "sigma": self.config.regressor_prior_scale})
 
         for reg_name in additive_regressors:
-            self.model_spec.add_feature(reg_name, RegressorFeature(family_name="additive_regressors", mode="multiplicative"))
+            self.model_spec.add_feature(
+                reg_name, RegressorFeature(family_name="additive_regressors", mode="multiplicative", prior=regressor_prior)
+            )
 
         for reg_name in multiplicative_regressors:
-            self.model_spec.add_feature(reg_name, RegressorFeature(family_name="multiplicative_regressors", mode="multiplicative"))
+            self.model_spec.add_feature(
+                reg_name, RegressorFeature(family_name="multiplicative_regressors", mode="multiplicative", prior=regressor_prior)
+            )
 
         self.validate_input_matrix(df)
 
@@ -163,6 +169,7 @@ class BayesTS:
                             period=family_dict["peroid"],
                             fourier_order=family_dict["fourier_order"],
                             mode=family_dict["mode"],
+                            prior=Distribution(kind="normal", params={"mu": 0, "sigma": self.config.seasonality_prior_scale}),
                         ),
                     )
 

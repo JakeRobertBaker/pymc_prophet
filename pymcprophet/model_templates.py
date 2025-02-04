@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field
 from typing import Literal
 
+from torch import normal
+
 
 class BayesTSConfig(BaseModel):
     growth: Literal["linear", "logistic", "flat"] = "linear"
@@ -11,6 +13,27 @@ class BayesTSConfig(BaseModel):
     yearly_seasonality: Literal["enabled", "disabled", "auto"] = "auto"
     seasonality_prior_scale: float = Field(10.0, gt=0)
     seasonality_mode: Literal["additive", "multiplicative"] = "additive"
+    regressor_prior_scale: float = Field(10.0, gt=0)
+
+
+# Prophet input args TODO
+# changepoints=None, TODO
+# n_changepoints=25, TODO
+# changepoint_range=0.8,TODO
+# holidays=None, -  let's do this as add regressor
+# holidays_prior_scale=10.0, - doing as regressor prior scale
+# changepoint_prior_scale=0.05, TODO
+# mcmc_samples=0,
+# interval_width=0.80,
+# uncertainty_samples=1000,
+# stan_backend=None,
+# scaling: str = 'absmax', TODO check if this mixes with regressors,think not and just need standardize in add regressor method.
+# holidays_mode=None,
+
+
+class Distribution(BaseModel):
+    kind: Literal["normal", "laplace"]
+    params: dict[str, float]
 
 
 # an individual feature ----------
@@ -24,6 +47,7 @@ class _RegressorFeature(Feature):
     mode: Literal["additive", "multiplicative"]
     bayes_params: dict[str, float] | None = None
     # TODO bayes params
+    prior: Distribution
 
 
 class RegressorFeature(_RegressorFeature):
