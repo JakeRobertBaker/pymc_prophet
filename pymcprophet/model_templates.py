@@ -16,80 +16,71 @@ class BayesTSConfig(BaseModel):
 # an individual feature ----------
 class Feature(BaseModel, validate_assignment=True):
     feature_origin: Literal["input", "generated"] = "input"
-
-
-class RegressorFeature(Feature):
-    prior_params: dict[str, float] | None = None
-    posterior_dist: list | None = None
-    posterior_stats: dict | None = None
-
-
-# each feature lives in a FeatureFamily ----------
-class FeatureFamily(BaseModel, validate_assignment=True):
-    features: dict[str, Feature] = {}
     family_type: Literal["feature"] = "feature"
-
-    def get_cols(self):
-        return [feature_name for feature_name in self.features.keys()]
-
-    def get_input_feature_cols(self):
-        return [feature_name for feature_name, feature in self.features.items() if feature.feature_origin == "input"]
-
-    def add_feature(self, feature_name: str, feature: Feature):
-        if feature_name in self.features.keys():
-            raise ValueError(f"A feature of of name {feature_name} has already been added to this family.")
-        self.features = self.features | {feature_name: feature}
+    family_name: str
 
 
-class _RegressorFamily(FeatureFamily):
+class _RegressorFeature(Feature):
     mode: Literal["additive", "multiplicative"]
+    bayes_params: dict[str, float] | None = None
+    # TODO bayes params
 
 
-class RegressorFamily(_RegressorFamily):
+class RegressorFeature(_RegressorFeature):
     family_type: Literal["regressor"] = "regressor"
-    regressor_type: Literal["seasonal", "extra_regressor", "holiday"]
+    regressor_type: Literal["extra_regressor", "holiday"] = "extra_regressor"
 
 
-class SeasonalityFamily(_RegressorFamily):
+class SeasonalityFeature(_RegressorFeature):
+    feature_origin: Literal["generated"] = "generated"
     family_type: Literal["seasonal"] = "seasonal"
     period: float = Field(gt=0)
     fourier_order: int = Field(gt=0)
 
 
-# each FeatureFamily lives in ModelSpecification ----------
+#
 class ModelSpecification(BaseModel, validate_assignment=True):
-    feature_families: dict[str, FeatureFamily | RegressorFamily | SeasonalityFamily] = {}
+    features: dict[str, Feature | RegressorFeature | SeasonalityFeature] = {}
 
-    def add_family(self, family_name: str, feature_family: FeatureFamily):
-        if family_name in self.feature_families.keys():
-            raise ValueError(f"A feature family of name {family_name} has already been added.")
-        self.feature_families = self.feature_families | {family_name: feature_family}
+    def add_feature(self, feature_name: str, feature: Feature):
+        if feature_name in self.features.keys():
+            raise ValueError(f"A feature of of name {feature_name} has already been added to this family.")
 
-    def _get_feature_cols(
+        self.features = self.features | {feature_name: feature}
+
+    def _get_features(
         self,
-        family_types_filter: list[str] = ["seasonal", "regressor", "feature"],
-        feature_origin_filter: list[str] = ["input", "generated"],
-    ):
-        cols = []
-        for family_name, feature_family in self.feature_families.items():
-            if feature_family.family_type in family_types_filter:
-                for feature_name, feature in feature_family.features.items():
-                    if feature.feature_origin in feature_origin_filter:
-                        cols.append(feature_name)
+        family_types_filter: list[Literal["seasonal", "regressor", "feature"]] = None,
+        feature_origin_filter: list[Literal["input", "generated"]] = None,
+    ) -> dict[str, Feature | RegressorFeature | SeasonalityFeature]:
+        eligible_feature_dict = self.features
+        if family_types_filter:
+            eligible_feature_dict = {
+                feature_name: feature
+                for feature_name, feature in eligible_feature_dict.items()
+                if feature.family_type in family_types_filter
+            }
 
-        return cols
+        if feature_origin_filter:
+            eligible_feature_dict = {
+                feature_name: feature
+                for feature_name, feature in eligible_feature_dict.items()
+                if feature.feature_origin in feature_origin_filter
+            }
+
+        return eligible_feature_dict
+
+    def get_cols(self):
+        return list(self._get_features().keys())
+
+    def get_input_feature_dict(self):
+        return self._get_features(feature_origin_filter=["input"])
 
     def get_input_feature_cols(self):
-        return self._get_feature_cols(feature_origin_filter=["input"])
+        return list(self.get_input_feature_dict().keys())
 
-    def get_feature_cols(self):
-        return self._get_feature_cols(family_types_filter=["feature"])
+    def get_seasonality_feature_dict(self) -> dict[str, SeasonalityFeature]:
+        return self._get_features(family_types_filter=["seasonal"])
 
-    def get_regressor_cols(self):
-        return self._get_feature_cols(family_types_filter=["regressor"])
-
-    def get_seasonality_cols(self):
-        return self._get_feature_cols(family_types_filter=["seasonal"])
-
-    def get_seasonal_families(self):
-        return {k: v for k, v in self.feature_families.items() if v.family_type == "seasonal"}
+    def get_seasonality_feature_cols(self):
+        return list(self.get_seasonality_feature_dict().keys())
