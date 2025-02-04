@@ -3,15 +3,12 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 import numpy as np
 
-
-from pymcprophet.model_templates import (
+from pymcprophet.new_model_templates import (
     BayesTSConfig,
     Feature,
     RegressorFeature,
-    FeatureFamily,
-    RegressorFamily,
-    SeasonalityFamily,
     ModelSpecification,
+    SeasonalityFeature,
 )
 
 
@@ -21,14 +18,13 @@ class BayesTS:
         self.model_spec = ModelSpecification()
 
         if config.growth == "logistic":
-            logisitc_fam = FeatureFamily(features={"cap": Feature()})
+            self.model_spec.add_feature("cap", Feature(family_name="logistic"))
             if config.floor_logistic:
-                logisitc_fam.add_feature(feature_name="floor", feature=Feature())
-
-            self.model_spec.add_family("logistic", logisitc_fam)
+                self.model_spec.add_feature("floor", Feature(family_name="logistic"))
 
         self.data_assigned = False
         self.y_scales_set = False
+        self.seasonality_families = {}
 
     def assign_model_matrix(
         self,
@@ -42,21 +38,13 @@ class BayesTS:
         Assigns things like scale params.
         """
         if self.data_assigned:
-            ValueError("Data already assigned to model")
+            raise ValueError("Data already assigned to model")
 
-        additive_regressor_family = RegressorFamily(
-            regressor_type="extra_regressor",
-            mode="additive",
-            features={reg: RegressorFeature() for reg in additive_regressors},
-        )
-        self.model_spec.add_family("additive_regressors", additive_regressor_family)
+        for reg_name in additive_regressors:
+            self.model_spec.add_feature(reg_name, RegressorFeature(family_name="additive_regressors", mode="multiplicative"))
 
-        multiplicative_regressor_family = RegressorFamily(
-            regressor_type="extra_regressor",
-            mode="additive",
-            features={reg: RegressorFeature() for reg in additive_regressors},
-        )
-        self.model_spec.add_family("multiplicative_regressors", multiplicative_regressor_family)
+        for reg_name in multiplicative_regressors:
+            self.model_spec.add_feature(reg_name, RegressorFeature(family_name="multiplicative_regressors", mode="multiplicative"))
 
         self.validate_input_matrix(df)
 
@@ -79,9 +67,7 @@ class BayesTS:
         min_dt = dt.iloc[dt.values.nonzero()[0]].min()
 
         # yearly if therea are >= 2 years of history
-        if (self.config.yearly_seasonality == "auto" and range >= pd.Timedelta(days=730)) or (
-            self.config.yearly_seasonality == "enabled"
-        ):
+        if (self.config.yearly_seasonality == "auto" and range >= pd.Timedelta(days=730)) or (self.config.yearly_seasonality == "enabled"):
             self.add_yearly_seasonality()
 
         # weekly if there are >= 2 weeks of history and there exists spacing < 7 days
@@ -96,19 +82,23 @@ class BayesTS:
         ):
             self.add_daily_seasonality()
 
-    def add_seasonality(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
+    def add_seasonality_family(self, name: str, period: float, fourier_order: int, mode: Literal["additive", "multiplicative"]):
         if self.data_assigned:
             raise ValueError("We do not support adding seasonalities after data is assigned. Do that before.")
-        self.model_spec.add_family(name, SeasonalityFamily(mode=mode, period=period, fourier_order=fourier_order))
+
+        if name in self.seasonality_families:
+            raise ValueError("A seasonality of the same name has already been added.")
+
+        self.seasonality_families[name] = {"peroid": period, "fourier_order": fourier_order, "mode": mode}
 
     def add_daily_seasonality(self, fourier_order: int = 4):
-        self.add_seasonality("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self.add_seasonality_family("daily", period=1, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def add_weekly_seasonality(self, fourier_order: int = 3):
-        self.add_seasonality("weekly", period=7, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self.add_seasonality_family("weekly", period=7, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def add_yearly_seasonality(self, fourier_order: int = 10):
-        self.add_seasonality("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+        self.add_seasonality_family("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
     def validate_input_matrix(self, df: pd.DataFrame):
         """
@@ -121,10 +111,9 @@ class BayesTS:
         if "ds" not in df.columns:
             missing_cols.append("ds the time var")
 
-        for family_name, feature_family in self.model_spec.feature_families.items():
-            for input_feature_name in feature_family.get_input_feature_cols():
-                if input_feature_name not in df.columns:
-                    missing_cols.append((f"{input_feature_name} from {family_name} family of type {feature_family.family_type}"))
+        for feature_name, feature in self.model_spec.get_input_feature_dict().items():
+            if feature_name not in df.columns:
+                missing_cols.append(f"col {feature_name} of family {feature.family_name} of type {feature.family_type}")
 
         if missing_cols:
             raise ValueError(f"Required cols missing,\n\t{', '.join(missing_cols)}")
@@ -152,10 +141,10 @@ class BayesTS:
         dates = df["ds"].to_numpy(dtype=np.int64) / day_to_nanosec
         df["t_seasonality"] = dates
 
-        for family_name, seasonality_family in self.model_spec.get_seasonal_families().items():
+        for family_name, family_dict in self.seasonality_families.items():
             # calculate terms
-            n_vals = np.arange(1, seasonality_family.fourier_order + 1)
-            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / seasonality_family.period)
+            n_vals = np.arange(1, family_dict["fourier_order"] + 1)
+            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / family_dict["peroid"])
             sin_terms = np.sin(t)  # shape (fourier_order, T)
             cos_terms = np.cos(t)  # shape (fourier_order, T)
 
@@ -166,7 +155,16 @@ class BayesTS:
             # When we do this for the first time ass these created cols to the model spec
             if not self.data_assigned:
                 for name in sin_col_names + cos_col_names:
-                    seasonality_family.add_feature(name, RegressorFeature(feature_origin="generated"))
+                    # {"peroid": period, "fourier_order": fourier_order, "mode": mode}
+                    self.model_spec.add_feature(
+                        name,
+                        SeasonalityFeature(
+                            family_name=family_name,
+                            period=family_dict["peroid"],
+                            fourier_order=family_dict["fourier_order"],
+                            mode=family_dict["mode"],
+                        ),
+                    )
 
             sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)

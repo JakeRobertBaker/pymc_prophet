@@ -78,7 +78,7 @@ class ModelSpecification(BaseModel, validate_assignment=True):
                         cols.append(feature_name)
 
         return cols
-    
+
     def get_input_feature_cols(self):
         return self._get_feature_cols(feature_origin_filter=["input"])
 
