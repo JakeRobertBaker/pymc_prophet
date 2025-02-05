@@ -1,8 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Literal
 
-from torch import normal
-
 
 class BayesTSConfig(BaseModel):
     growth: Literal["linear", "logistic", "flat"] = "linear"
@@ -31,11 +29,6 @@ class BayesTSConfig(BaseModel):
 # holidays_mode=None,
 
 
-class Distribution(BaseModel):
-    kind: Literal["normal", "laplace"]
-    params: dict[str, float]
-
-
 # an individual feature ----------
 class Feature(BaseModel, validate_assignment=True):
     feature_origin: Literal["input", "generated"] = "input"
@@ -47,7 +40,8 @@ class _RegressorFeature(Feature):
     mode: Literal["additive", "multiplicative"]
     bayes_params: dict[str, float] | None = None
     # TODO bayes params
-    prior: Distribution
+    prior_kind: Literal["normal", "laplace"]
+    prior_params: dict[str, float]
 
 
 class RegressorFeature(_RegressorFeature):
