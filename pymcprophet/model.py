@@ -20,7 +20,35 @@ class BayesTS:
         self.y_scales_set = False
         self.seasonality_families = {}
 
-    def add_regressor(self):
+    def add_regressor(
+        self,
+        reg_name: str,
+        prior_scale: float | None = None,
+        mode: Literal["additive", "multiplicative"] | None = None,
+        regressor_family: str | None = None,
+        standardize: str = "auto",
+    ):
+        if self.data_assigned:
+            raise ValueError("We do not support adding regressors after data is assigned. Do that before.")
+
+        if not prior_scale:
+            prior_scale = self.config.regressor_prior_scale
+
+        if not mode:
+            mode = self.config.regressor_mode
+
+        if not regressor_family:
+            regressor_family = mode + "_regressors"
+
+        regressor_prior_params = {"mu": 0, "sigma": prior_scale}
+        self.model_spec.add_feature(
+            reg_name, RegressorFeature(family_name=regressor_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, standardize=standardize)
+        )
+
+        # TODO add auto standardisation
+        standardize
+
+    def _set_regressor_scales(self):
         pass
 
     def assign_model_matrix(
@@ -37,32 +65,15 @@ class BayesTS:
         if self.data_assigned:
             raise ValueError("Data already assigned to model")
 
-        # TODO rarefactor to add regressor of desired prior
-
-        regressor_prior_params = {"mu": 0, "sigma": self.config.regressor_prior_scale}
-
-        for reg_name in additive_regressors:
-            self.model_spec.add_feature(
-                reg_name,
-                RegressorFeature(
-                    family_name="additive_regressors", mode="multiplicative", prior_kind="normal", prior_params=regressor_prior_params
-                ),
-            )
-
-        for reg_name in multiplicative_regressors:
-            self.model_spec.add_feature(
-                reg_name,
-                RegressorFeature(
-                    family_name="multiplicative_regressors", mode="multiplicative", prior_kind="normal", prior_params=regressor_prior_params
-                ),
-            )
-
+        # ensure basic cols and types are present
         self.validate_input_matrix(df)
-
         self.raw_model_df = df[self.get_input_model_cols()]
-        self._set_y_scale()
-        self.determine_seasonalities()
 
+        # set scales
+        self._set_y_scale()
+        # TODO set scales for regressors and all that needs scale
+        self.determine_seasonalities()
+        
         # use class information to produce the model matrix
         self.model_df = self._produce_model_matrix(df)
         self.data_assigned = True
@@ -146,6 +157,7 @@ class BayesTS:
 
         # scale y var
         df = self.transform_y(df)
+        # TODO add transform all other vars
 
         # seasonality uses days since epoch
         day_to_nanosec = 3600 * 24 * int(1e9)
@@ -200,7 +212,7 @@ class BayesTS:
         else:
             shift = 0 if self.config.y_scale_type == "absmax" else self.raw_model_df["y"].min()
 
-        df["y_trans"] = (df["y"] - shift) / self.scale
+        df["y_trans"] = (df["y"] - shift) / self.y_scale
 
         return df
 
@@ -214,15 +226,15 @@ class BayesTS:
 
         if self.config.y_scale_type == "absmax":
             if self.config.floor_logistic:
-                self.scale = (self.raw_model_df["y"] - self.raw_model_df["floor"]).abs().max()
+                self.y_scale = (self.raw_model_df["y"] - self.raw_model_df["floor"]).abs().max()
             else:
-                self.scale = self.raw_model_df["y"].abs().max()
+                self.y_scale = self.raw_model_df["y"].abs().max()
 
         if self.config.y_scale_type == "minmax":
             if self.config.floor_logistic:
-                self.scale = self.raw_model_df["cap"].max() - self.raw_model_df["floor"].min()
+                self.y_scale = self.raw_model_df["cap"].max() - self.raw_model_df["floor"].min()
             else:
-                self.scale = self.raw_model_df["y"].max() - self.raw_model_df["y"].min()
+                self.y_scale = self.raw_model_df["y"].max() - self.raw_model_df["y"].min()
 
         self.y_scales_set = True
 

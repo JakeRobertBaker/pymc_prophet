@@ -12,6 +12,7 @@ class BayesTSConfig(BaseModel):
     seasonality_prior_scale: float = Field(10.0, gt=0)
     seasonality_mode: Literal["additive", "multiplicative"] = "additive"
     regressor_prior_scale: float = Field(10.0, gt=0)
+    regressor_mode: Literal["additive", "multiplicative"] = "additive"
 
 
 # Prophet input args TODO
@@ -47,6 +48,9 @@ class _RegressorFeature(Feature):
 class RegressorFeature(_RegressorFeature):
     family_type: Literal["regressor"] = "regressor"
     regressor_type: Literal["extra_regressor", "holiday"] = "extra_regressor"
+    standardize: str | None = None
+    standardize_scale: float = 1
+    standardize_shift: float = 0
 
 
 class SeasonalityFeature(_RegressorFeature):
