@@ -48,10 +48,8 @@ class _RegressorFeature(Feature):
 class RegressorFeature(_RegressorFeature):
     family_type: Literal["regressor"] = "regressor"
     regressor_type: Literal["extra_regressor", "holiday"] = "extra_regressor"
-    standardize: str | None = None
-    standardize_scale: float = 1
-    standardize_shift: float = 0
-
+    standardize: Literal[True, False, "auto"]
+    standardize_params: dict[Literal["scale", "shift"], float] | None = None
 
 class SeasonalityFeature(_RegressorFeature):
     feature_origin: Literal["generated"] = "generated"
@@ -106,3 +104,10 @@ class ModelSpecification(BaseModel, validate_assignment=True):
 
     def get_seasonality_feature_cols(self):
         return list(self.get_seasonality_feature_dict().keys())
+    
+    def get_regressor_feature_dict(self) -> dict[str, RegressorFeature]:
+        return self._get_features(family_types_filter=["regressor"])
+
+    def get_regressor_feature_cols(self):
+        return list(self.get_regressor_feature_dict().keys())
+

@@ -26,7 +26,7 @@ class BayesTS:
         prior_scale: float | None = None,
         mode: Literal["additive", "multiplicative"] | None = None,
         regressor_family: str | None = None,
-        standardize: str = "auto",
+        standardize: Literal[True, False, "auto"] = "auto",
     ):
         if self.data_assigned:
             raise ValueError("We do not support adding regressors after data is assigned. Do that before.")
@@ -42,21 +42,13 @@ class BayesTS:
 
         regressor_prior_params = {"mu": 0, "sigma": prior_scale}
         self.model_spec.add_feature(
-            reg_name, RegressorFeature(family_name=regressor_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, standardize=standardize)
+            reg_name,
+            RegressorFeature(
+                family_name=regressor_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, standardize=standardize
+            ),
         )
 
-        # TODO add auto standardisation
-        standardize
-
-    def _set_regressor_scales(self):
-        pass
-
-    def assign_model_matrix(
-        self,
-        df: pd.DataFrame,
-        additive_regressors: list[str] = [],
-        multiplicative_regressors: list[str] = [],
-    ):
+    def assign_model_matrix(self, df: pd.DataFrame):
         """
         Assign the model data to model class instance.
         This is done once per model.
@@ -69,14 +61,90 @@ class BayesTS:
         self.validate_input_matrix(df)
         self.raw_model_df = df[self.get_input_model_cols()]
 
-        # set scales
+        # set scales and seasonalities
         self._set_y_scale()
-        # TODO set scales for regressors and all that needs scale
+        self._set_regressor_scales()
         self.determine_seasonalities()
-        
+
         # use class information to produce the model matrix
         self.model_df = self._produce_model_matrix(df)
         self.data_assigned = True
+
+    def validate_input_matrix(self, df: pd.DataFrame):
+        """
+        Validate that neccessary input cols and types are present.
+        Derived cols such as seasonality are not required.
+        """
+        missing_cols = []
+        if "y" not in df.columns:
+            missing_cols.append("y the indep var")
+        if "ds" not in df.columns:
+            missing_cols.append("ds the time var")
+
+        for feature_name, feature in self.model_spec.get_input_feature_dict().items():
+            if feature_name not in df.columns:
+                missing_cols.append(f"col {feature_name} of family {feature.family_name} of type {feature.family_type}")
+
+        if missing_cols:
+            raise ValueError(f"Required cols missing,\n\t{', '.join(missing_cols)}")
+
+        if not is_datetime64_any_dtype(df["ds"]):
+            raise ValueError(f"Col 'ds' dtype {df['ds'].dtype} is not datetime")
+
+    def produce_model_matrix(self, df: pd.DataFrame):
+        """
+        This wrapped version of produce applies to future dataframes too. Need to validate.
+        """
+        self.validate_input_matrix(df)
+        return self._produce_model_matrix(df)
+
+    def _produce_model_matrix(self, df: pd.DataFrame):
+        """
+        Used in assign model matrix but made generic so we can apply to future df.
+        """
+
+        # scale y var
+        df = self._transform_y(df)
+        df - self._transform_regressors(df)
+        # TODO add transform all other vars may be done
+
+        # seasonality uses days since epoch
+        day_to_nanosec = 3600 * 24 * int(1e9)
+        dates = df["ds"].to_numpy(dtype=np.int64) / day_to_nanosec
+        df["t_seasonality"] = dates
+
+        for family_name, family_dict in self.seasonality_families.items():
+            # calculate terms
+            n_vals = np.arange(1, family_dict["fourier_order"] + 1)
+            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / family_dict["peroid"])
+            sin_terms = np.sin(t)  # shape (fourier_order, T)
+            cos_terms = np.cos(t)  # shape (fourier_order, T)
+
+            # create names in the same order
+            sin_col_names = [f"{family_name}_sin_{n}" for n in n_vals]
+            cos_col_names = [f"{family_name}_cos_{n}" for n in n_vals]
+
+            # When we do this for the first time ass these created cols to the model spec
+            if not self.data_assigned:
+                for name in sin_col_names + cos_col_names:
+                    # {"peroid": period, "fourier_order": fourier_order, "mode": mode}
+                    self.model_spec.add_feature(
+                        name,
+                        SeasonalityFeature(
+                            family_name=family_name,
+                            period=family_dict["peroid"],
+                            fourier_order=family_dict["fourier_order"],
+                            mode=family_dict["mode"],
+                            prior_kind="normal",
+                            prior_params={"mu": 0, "sigma": self.config.seasonality_prior_scale},
+                        ),
+                    )
+
+            sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
+            cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
+            df = pd.concat([df, sin_df, cos_df], axis=1)
+
+        return df
 
     def determine_seasonalities(self):
         """
@@ -122,82 +190,7 @@ class BayesTS:
     def add_yearly_seasonality(self, fourier_order: int = 10):
         self.add_seasonality_family("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
 
-    def validate_input_matrix(self, df: pd.DataFrame):
-        """
-        Validate that neccessary input cols and types are present.
-        Derived cols such as seasonality are not required.
-        """
-        missing_cols = []
-        if "y" not in df.columns:
-            missing_cols.append("y the indep var")
-        if "ds" not in df.columns:
-            missing_cols.append("ds the time var")
-
-        for feature_name, feature in self.model_spec.get_input_feature_dict().items():
-            if feature_name not in df.columns:
-                missing_cols.append(f"col {feature_name} of family {feature.family_name} of type {feature.family_type}")
-
-        if missing_cols:
-            raise ValueError(f"Required cols missing,\n\t{', '.join(missing_cols)}")
-
-        if not is_datetime64_any_dtype(df["ds"]):
-            raise ValueError(f"Col 'ds' dtype {df['ds'].dtype} is not datetime")
-
-    def produce_model_matrix(self, df: pd.DataFrame):
-        """
-        This wrapped version of produce applies to future dataframes too. Need to validate.
-        """
-        self.validate_input_matrix(df)
-        return self._produce_model_matrix(df)
-
-    def _produce_model_matrix(self, df: pd.DataFrame):
-        """
-        Used in assign model matrix but made generic so we can apply to future df.
-        """
-
-        # scale y var
-        df = self.transform_y(df)
-        # TODO add transform all other vars
-
-        # seasonality uses days since epoch
-        day_to_nanosec = 3600 * 24 * int(1e9)
-        dates = df["ds"].to_numpy(dtype=np.int64) / day_to_nanosec
-        df["t_seasonality"] = dates
-
-        for family_name, family_dict in self.seasonality_families.items():
-            # calculate terms
-            n_vals = np.arange(1, family_dict["fourier_order"] + 1)
-            t = np.outer(n_vals, df["t_seasonality"] * 2 * np.pi / family_dict["peroid"])
-            sin_terms = np.sin(t)  # shape (fourier_order, T)
-            cos_terms = np.cos(t)  # shape (fourier_order, T)
-
-            # create names in the same order
-            sin_col_names = [f"{family_name}_sin_{n}" for n in n_vals]
-            cos_col_names = [f"{family_name}_cos_{n}" for n in n_vals]
-
-            # When we do this for the first time ass these created cols to the model spec
-            if not self.data_assigned:
-                for name in sin_col_names + cos_col_names:
-                    # {"peroid": period, "fourier_order": fourier_order, "mode": mode}
-                    self.model_spec.add_feature(
-                        name,
-                        SeasonalityFeature(
-                            family_name=family_name,
-                            period=family_dict["peroid"],
-                            fourier_order=family_dict["fourier_order"],
-                            mode=family_dict["mode"],
-                            prior_kind="normal",
-                            prior_params={"mu": 0, "sigma": self.config.seasonality_prior_scale},
-                        ),
-                    )
-
-            sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
-            cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
-            df = pd.concat([df, sin_df, cos_df], axis=1)
-
-        return df
-
-    def transform_y(self, input_df: pd.DataFrame) -> pd.DataFrame:
+    def _transform_y(self, input_df: pd.DataFrame) -> pd.DataFrame:
         """
         Apply affine transform:
             y(t) ->  ( y(t) - shift(t) ) / scale
@@ -237,6 +230,35 @@ class BayesTS:
                 self.y_scale = self.raw_model_df["y"].max() - self.raw_model_df["y"].min()
 
         self.y_scales_set = True
+
+    def _transform_regressors(self, input_df: pd.DataFrame) -> pd.DataFrame:
+        df = input_df.copy()
+
+        for reg_name, regressor in self.model_spec.get_regressor_feature_dict().items():
+            if regressor.standardize:
+                df[f"{reg_name}_std"] = (df[reg_name] - regressor.standardize_params["shift"]) / regressor.standardize_params["scale"]
+
+        return df
+
+    def _set_regressor_scales(self):
+        for reg_name, regressor in self.model_spec.get_regressor_feature_dict().items():
+            uinique_reg_vals = set(self.raw_model_df[reg_name].unique())
+
+            # Never standardize single valued regressor
+            if len(uinique_reg_vals) <= 1:
+                regressor.standardize = False
+
+            # 'auto' setting only denies binary variables
+            if regressor.standardize == "auto":
+                if uinique_reg_vals == {1, 0}:
+                    regressor.standardize = False
+                else:
+                    regressor.standardize = True
+
+            if regressor.standardize:
+                shift = self.raw_model_df[reg_name].mean()
+                scale = self.raw_model_df[reg_name].std()
+                regressor.standardize_params = {"scale": scale, "shift": shift}
 
     def get_input_model_cols(self) -> list[str]:
         """
