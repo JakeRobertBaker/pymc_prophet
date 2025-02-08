@@ -2,12 +2,13 @@ from typing import Literal
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 import numpy as np
+import datetime as dt
 
-from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, ModelSpecification, SeasonalityFeature
+from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, HolidayFeature, ModelSpecification, SeasonalityFeature
 
 
 class BayesTS:
-    def __init__(self, config: BayesTSConfig):
+    def __init__(self, config: BayesTSConfig, holidays=None):
         self.config = config
         self.model_spec = ModelSpecification()
 
@@ -19,6 +20,55 @@ class BayesTS:
         self.data_assigned = False
         self.y_scales_set = False
         self.seasonality_families = {}
+
+    def add_user_specified_holidays(
+        self,
+        hol_df: pd.DataFrame,
+        holiday_family: str = "user_specified_holiday",
+        prior_scale: float | None = None,
+        mode: Literal["additive", "multiplicative"] | None = None,
+    ):
+        """
+        Add user specified holidays
+
+        Args:
+            hol_df pd.DataFrame with cols: ds, holiday, upper_window_lower_window
+        """
+        if self.data_assigned:
+            raise ValueError("We do not support adding holidays after data is assigned. Do that before.")
+
+        if not prior_scale:
+            prior_scale = self.config.regressor_prior_scale
+
+        if not mode:
+            mode = self.config.regressor_mode
+
+        regressor_prior_params = {"mu": 0, "sigma": prior_scale}
+
+        if not is_datetime64_any_dtype(hol_df["ds"]):
+            raise ValueError(f"Holiday 'ds' dtype {hol_df['ds'].dtype} is not datetime")
+
+        # basic form is equivalent to window = 0
+        for window_col in ["lower_window", "upper_window"]:
+            if window_col not in hol_df.columns:
+                hol_df[window_col] = 0
+
+        for hol_name in hol_df["holiday"].unique():
+            hdf = hol_df.query("holiday == @hol_name").copy()
+
+            # define inclusive date range
+            hdf["start_ds"] = hdf["ds"] - hdf["lower_window"] * dt.timedelta(days=1)
+            hdf["end_ds"] = hdf["ds"] + hdf["upper_window"] * dt.timedelta(days=1)
+            hdf["date_list"] = hdf.apply(lambda row: pd.date_range(row["start_ds"], row["end_ds"]).tolist(), axis=1)
+            # map the list of time stamps to a list on unique dates
+            hdates: list[dt.datetime] = list(set([timestamp.date() for row_date_list in hdf["date_list"] for timestamp in row_date_list]))
+
+            self.model_spec.add_feature(
+                hol_name,
+                HolidayFeature(
+                    family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=hdates
+                ),
+            )
 
     def add_regressor(
         self,

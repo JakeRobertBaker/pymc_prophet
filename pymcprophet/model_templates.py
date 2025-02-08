@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Literal
+import datetime as dt
 
 
 class BayesTSConfig(BaseModel):
@@ -19,7 +20,7 @@ class BayesTSConfig(BaseModel):
 # changepoints=None, TODO
 # n_changepoints=25, TODO
 # changepoint_range=0.8,TODO
-# holidays=None, -  let's do this as add regressor
+# holidays=None, -  TODO
 # holidays_prior_scale=10.0, - doing as regressor prior scale
 # changepoint_prior_scale=0.05, TODO
 # mcmc_samples=0,
@@ -47,9 +48,15 @@ class _RegressorFeature(Feature):
 
 class RegressorFeature(_RegressorFeature):
     family_type: Literal["regressor"] = "regressor"
-    regressor_type: Literal["extra_regressor", "holiday"] = "extra_regressor"
     standardize: Literal[True, False, "auto"]
     standardize_params: dict[Literal["scale", "shift"], float] | None = None
+
+
+class HolidayFeature(_RegressorFeature):
+    feature_origin: Literal["generated"] = "generated"
+    family_type: Literal["holiday"] = "holiday"
+    dates: list[dt.date]
+
 
 class SeasonalityFeature(_RegressorFeature):
     feature_origin: Literal["generated"] = "generated"
@@ -58,9 +65,8 @@ class SeasonalityFeature(_RegressorFeature):
     fourier_order: int = Field(gt=0)
 
 
-#
 class ModelSpecification(BaseModel, validate_assignment=True):
-    features: dict[str, Feature | RegressorFeature | SeasonalityFeature] = {}
+    features: dict[str, Feature | RegressorFeature | HolidayFeature | SeasonalityFeature] = {}
 
     def add_feature(self, feature_name: str, feature: Feature):
         if feature_name in self.features.keys():
@@ -70,7 +76,7 @@ class ModelSpecification(BaseModel, validate_assignment=True):
 
     def _get_features(
         self,
-        family_types_filter: list[Literal["seasonal", "regressor", "feature"]] = None,
+        family_types_filter: list[Literal["feature", "regressor", "holiday", "seasonal"]] = None,
         feature_origin_filter: list[Literal["input", "generated"]] = None,
     ) -> dict[str, Feature | RegressorFeature | SeasonalityFeature]:
         eligible_feature_dict = self.features
@@ -104,10 +110,15 @@ class ModelSpecification(BaseModel, validate_assignment=True):
 
     def get_seasonality_feature_cols(self):
         return list(self.get_seasonality_feature_dict().keys())
-    
+
     def get_regressor_feature_dict(self) -> dict[str, RegressorFeature]:
         return self._get_features(family_types_filter=["regressor"])
 
     def get_regressor_feature_cols(self):
         return list(self.get_regressor_feature_dict().keys())
 
+    def get_holiday_feature_dict(self) -> dict[str, HolidayFeature]:
+        return self._get_features(family_types_filter=["holiday"])
+
+    def get_holiday_feature_cols(self):
+        return list(self.get_holiday_feature_dict().keys())
