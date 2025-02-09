@@ -3,7 +3,7 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 import numpy as np
 import datetime as dt
-import re 
+import re
 
 from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, HolidayFeature, ModelSpecification, SeasonalityFeature
 from pymcprophet.utils.make_holiday import make_holidays_df, get_country_holidays_class
@@ -74,10 +74,10 @@ class BayesTS:
             hdf["date_list"] = hdf.apply(lambda row: pd.date_range(row["start_ds"], row["end_ds"]).tolist(), axis=1)
             # map the list of time stamps to a list on unique dates
             hdates: list[dt.datetime] = list(set([timestamp.date() for row_date_list in hdf["date_list"] for timestamp in row_date_list]))
-            
-            holiday_short = hol_name.replace("_observed","")
-            holiday_short = re.sub(pattern=r"[^a-zA-Z0-9]",repl="",string=holiday_short)
-            holiday_short = re.sub(pattern=r" ",repl="_",string=holiday_short)
+
+            holiday_short = hol_name.replace("_observed", "")
+            holiday_short = re.sub(pattern=r"[^a-zA-Z0-9]", repl="", string=holiday_short)
+            holiday_short = re.sub(pattern=r" ", repl="_", string=holiday_short)
 
             self.model_spec.add_feature(
                 holiday_short,
@@ -126,6 +126,9 @@ class BayesTS:
         # ensure basic cols and types are present
         self.validate_input_matrix(df)
         self.raw_model_df = df[self.get_input_model_cols()]
+        self.train_ds_start = self.raw_model_df["ds"].min()
+        self.train_ds_end = self.raw_model_df["ds"].max()
+        self.ds_scale = self.train_ds_end - self.train_ds_start
 
         # set scales, seasonalities, holidays
         self._set_y_scale()
@@ -177,10 +180,11 @@ class BayesTS:
         Used in assign model matrix but made generic so we can apply to future df.
         """
 
-        # scale y var
+        # scale variables
         df = self._transform_y(df)
-        df - self._transform_regressors(df)
-        # TODO add transform all other vars may be done
+        df = self._transform_regressors(df)
+        df["t"] = (df["ds"] - self.train_ds_start) / self.ds_scale
+        # TODO add transform all other vars may be done, scale time
 
         # seasonality uses days since epoch
         day_to_nanosec = 3600 * 24 * int(1e9)
