@@ -14,6 +14,7 @@ class BayesTSConfig(BaseModel):
     seasonality_mode: Literal["additive", "multiplicative"] = "additive"
     regressor_prior_scale: float = Field(10.0, gt=0)
     regressor_mode: Literal["additive", "multiplicative"] = "additive"
+    forward_support_years: int = 45
 
 
 # Prophet input args TODO

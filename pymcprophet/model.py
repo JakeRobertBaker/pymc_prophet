@@ -3,12 +3,18 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 import numpy as np
 import datetime as dt
+import re 
 
 from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, HolidayFeature, ModelSpecification, SeasonalityFeature
+from pymcprophet.utils.make_holiday import make_holidays_df, get_country_holidays_class
 
 
 class BayesTS:
-    def __init__(self, config: BayesTSConfig, holidays=None):
+    def __init__(
+        self,
+        config: BayesTSConfig,
+        holidays=None,
+    ):
         self.config = config
         self.model_spec = ModelSpecification()
 
@@ -20,8 +26,14 @@ class BayesTS:
         self.data_assigned = False
         self.y_scales_set = False
         self.seasonality_families = {}
+        self.holiday_country = None
 
-    def add_user_specified_holidays(
+    def add_holiday_country(self, country: str):
+        # get raises Attribute error if country is not avaliable
+        get_country_holidays_class(country)
+        self.holiday_country = country
+
+    def add_holiday(
         self,
         hol_df: pd.DataFrame,
         holiday_family: str = "user_specified_holiday",
@@ -62,9 +74,13 @@ class BayesTS:
             hdf["date_list"] = hdf.apply(lambda row: pd.date_range(row["start_ds"], row["end_ds"]).tolist(), axis=1)
             # map the list of time stamps to a list on unique dates
             hdates: list[dt.datetime] = list(set([timestamp.date() for row_date_list in hdf["date_list"] for timestamp in row_date_list]))
+            
+            holiday_short = hol_name.replace("_observed","")
+            holiday_short = re.sub(pattern=r"[^a-zA-Z0-9]",repl="",string=holiday_short)
+            holiday_short = re.sub(pattern=r" ",repl="_",string=holiday_short)
 
             self.model_spec.add_feature(
-                hol_name,
+                holiday_short,
                 HolidayFeature(
                     family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=hdates
                 ),
@@ -111,14 +127,22 @@ class BayesTS:
         self.validate_input_matrix(df)
         self.raw_model_df = df[self.get_input_model_cols()]
 
-        # set scales and seasonalities
+        # set scales, seasonalities, holidays
         self._set_y_scale()
         self._set_regressor_scales()
         self.determine_seasonalities()
+        self.determine_country_holidays()
 
         # use class information to produce the model matrix
         self.model_df = self._produce_model_matrix(df)
         self.data_assigned = True
+
+    def determine_country_holidays(self):
+        if self.holiday_country:
+            min_year = self.raw_model_df["ds"].dt.year.min()
+            max_year = self.raw_model_df["ds"].dt.year.max() + self.config.forward_support_years
+            hol_df = make_holidays_df(year_list=np.arange(min_year, max_year), country=self.holiday_country)
+            self.add_holiday(hol_df, f"holiday_library_{self.holiday_country}")
 
     def validate_input_matrix(self, df: pd.DataFrame):
         """
@@ -190,9 +214,12 @@ class BayesTS:
                         ),
                     )
 
-            sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names)
-            cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names)
+            sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names, index=df.index)
+            cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names, index=df.index)
             df = pd.concat([df, sin_df, cos_df], axis=1)
+
+            for holiday_name, holiday_feature in self.model_spec.get_holiday_feature_dict().items():
+                df[holiday_name] = df["ds"].dt.date.isin(holiday_feature.dates).astype(int)
 
         return df
 
