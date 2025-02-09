@@ -21,8 +21,6 @@ class BayesTSConfig(BaseModel):
 # changepoints=None, TODO
 # n_changepoints=25, TODO
 # changepoint_range=0.8,TODO
-# holidays=None, -  TODO
-# holidays_prior_scale=10.0, - doing as regressor prior scale
 # changepoint_prior_scale=0.05, TODO
 # mcmc_samples=0,
 # interval_width=0.80,
