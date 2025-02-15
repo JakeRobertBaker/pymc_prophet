@@ -28,7 +28,10 @@ class BayesTS:
         self.seasonality_families = {}
         self.holiday_country = None
 
-    def add_holiday_country(self, country: str):
+    def add_holiday_country(
+        self,
+        country: str,
+    ):
         # get raises Attribute error if country is not avaliable
         get_country_holidays_class(country)
         self.holiday_country = country
@@ -39,6 +42,7 @@ class BayesTS:
         holiday_family: str = "user_specified_holiday",
         prior_scale: float | None = None,
         mode: Literal["additive", "multiplicative"] | None = None,
+        separate_lags: bool = True,
     ):
         """
         Add user specified holidays
@@ -65,26 +69,36 @@ class BayesTS:
             if window_col not in hol_df.columns:
                 hol_df[window_col] = 0
 
-        for hol_name in hol_df["holiday"].unique():
-            hdf = hol_df.query("holiday == @hol_name").copy()
+        for hol_name, hdf in hol_df.groupby("holiday"):
+            dates = []
+            holiday_short = re.sub(pattern=r"\s+", repl="_", string=hol_name)
+            holiday_short = re.sub(pattern=r"[^\w]", repl="", string=holiday_short).lower()
 
-            # define inclusive date range
-            hdf["start_ds"] = hdf["ds"] - hdf["lower_window"] * dt.timedelta(days=1)
-            hdf["end_ds"] = hdf["ds"] + hdf["upper_window"] * dt.timedelta(days=1)
-            hdf["date_list"] = hdf.apply(lambda row: pd.date_range(row["start_ds"], row["end_ds"]).tolist(), axis=1)
-            # map the list of time stamps to a list on unique dates
-            hdates: list[dt.datetime] = list(set([timestamp.date() for row_date_list in hdf["date_list"] for timestamp in row_date_list]))
+            # for every permitted lag get the dates
+            for lag in range(-hdf["lower_window"].max(), hdf["upper_window"].max() + 1):
+                lag_dates = hol_df.query(" lower_window >= -@lag and upper_window >= @lag ")["ds"].unique() - lag * dt.timedelta(days=1)
+                # treat the lags as separate cols
+                if separate_lags:
+                    holiday_short_delim = holiday_short if lag == 0 else f"{holiday_short}_lag_{lag}"
+                    self.model_spec.add_feature(
+                        holiday_short_delim,
+                        HolidayFeature(
+                            family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=lag_dates
+                        ),
+                    )
+                # else treat all lags as a single col
+                else:
+                    dates += lag_dates
 
-            holiday_short = hol_name.replace("_observed", "")
-            holiday_short = re.sub(pattern=r"[^a-zA-Z0-9]", repl="", string=holiday_short)
-            holiday_short = re.sub(pattern=r" ", repl="_", string=holiday_short)
-
-            self.model_spec.add_feature(
-                holiday_short,
-                HolidayFeature(
-                    family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=hdates
-                ),
-            )
+            # after for loop just add one col for that holiday
+            if not separate_lags:
+                dates = list(set(dates))
+                self.model_spec.add_feature(
+                    holiday_short,
+                    HolidayFeature(
+                        family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=dates
+                    ),
+                )
 
     def add_regressor(
         self,
@@ -145,7 +159,7 @@ class BayesTS:
             min_year = self.raw_model_df["ds"].dt.year.min()
             max_year = self.raw_model_df["ds"].dt.year.max() + self.config.forward_support_years
             hol_df = make_holidays_df(year_list=np.arange(min_year, max_year), country=self.holiday_country)
-            self.add_holiday(hol_df, f"holiday_library_{self.holiday_country}")
+            self.add_holiday(hol_df, f"holiday_library_{self.holiday_country}", separate_lags=False)
 
     def validate_input_matrix(self, df: pd.DataFrame):
         """
@@ -222,8 +236,9 @@ class BayesTS:
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names, index=df.index)
             df = pd.concat([df, sin_df, cos_df], axis=1)
 
-            for holiday_name, holiday_feature in self.model_spec.get_holiday_feature_dict().items():
-                df[holiday_name] = df["ds"].dt.date.isin(holiday_feature.dates).astype(int)
+        # add the holidays
+        for holiday_name, holiday_feature in self.model_spec.get_holiday_feature_dict().items():
+            df[holiday_name] = df["ds"].dt.date.isin(holiday_feature.dates).astype(int)
 
         return df
 
