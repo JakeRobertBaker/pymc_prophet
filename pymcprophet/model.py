@@ -1,6 +1,7 @@
 from typing import Literal
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
+from pandas import Timestamp, Timedelta
 import numpy as np
 import datetime as dt
 import re
@@ -13,7 +14,6 @@ class BayesTS:
     def __init__(
         self,
         config: BayesTSConfig,
-        holidays=None,
     ):
         self.config = config
         self.model_spec = ModelSpecification()
@@ -140,9 +140,9 @@ class BayesTS:
         # ensure basic cols and types are present
         self.validate_input_matrix(df)
         self.raw_model_df = df[self.get_input_model_cols()]
-        self.train_ds_start = self.raw_model_df["ds"].min()
-        self.train_ds_end = self.raw_model_df["ds"].max()
-        self.ds_scale = self.train_ds_end - self.train_ds_start
+        self.train_ds_start: Timestamp = self.raw_model_df["ds"].min()
+        self.train_ds_end: Timestamp = self.raw_model_df["ds"].max()
+        self.ds_scale: Timedelta = self.train_ds_end - self.train_ds_start
 
         # set scales, seasonalities, holidays
         self._set_y_scale()
@@ -152,7 +152,34 @@ class BayesTS:
 
         # use class information to produce the model matrix
         self.model_df = self._produce_model_matrix(df)
+
+        # once times are defined we can set the changepoints
+        if not self.config.changepoints:
+            self._auto_set_changepoints()
+        self.t_values = [(cp_date - self.train_ds_start.date()) / self.ds_scale for cp_date in self.config.changepoints]
+
         self.data_assigned = True
+
+    def _auto_set_changepoints(self):
+        cp_idx_max = int(self.config.changepoint_range * len(self.model_df))
+        cp_idx = np.linspace(0, cp_idx_max, self.config.n_changepoints + 1)[1:]
+        self.config.changepoints = self.model_df["ds"].iloc[cp_idx].dt.date.values.tolist()
+
+    def set_changepoints(self, changepoints: list[str | dt.date]):
+        """
+        Set the model changepoints as a list of dates
+        """
+        if self.config.changepoints:
+            raise ValueError("Changepoints already set. Set them before fit.")
+
+        if isinstance(changepoints[0], str):
+            changepoints = pd.to_datetime(changepoints).to_pydatetime().tolist()
+
+        self.config.changepoints = changepoints
+
+    def get_t_change(self):
+        if not self.data_assigned():
+            raise ValueError("Need to assign model matrix before accessing cp t values.")
 
     def determine_country_holidays(self):
         if self.holiday_country:
@@ -186,6 +213,9 @@ class BayesTS:
         """
         This wrapped version of produce applies to future dataframes too. Need to validate.
         """
+        if not self.data_assigned:
+            raise ValueError("To obtain an out of sample model matrix the in sample matrix must be assigned first.")
+
         self.validate_input_matrix(df)
         return self._produce_model_matrix(df)
 

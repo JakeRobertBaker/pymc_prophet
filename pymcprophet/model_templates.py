@@ -14,8 +14,11 @@ class BayesTSConfig(BaseModel):
     seasonality_mode: Literal["additive", "multiplicative"] = "additive"
     regressor_prior_scale: float = Field(10.0, gt=0)
     regressor_mode: Literal["additive", "multiplicative"] = "additive"
-    forward_support_years: int = 45
-
+    changepoints: list[dt.date] = None
+    n_changepoints: int = Field(25, gt=0)
+    changepoint_range: float = Field(0.8, gt=0)
+    changepoint_prior_scale: float = Field(0.05, gt=0)
+    forward_support_years: int = Field(45, gt=0)
 
 # Prophet input args TODO
 # changepoints=None, TODO
