@@ -153,7 +153,7 @@ class BayesTS:
         # use class information to produce the model matrix
         self.model_df = self._produce_model_matrix(df)
 
-        # once times are defined we can set the changepoints
+        # once times are defined we can set the t values of the changepoints
         if not self.config.changepoints:
             self._auto_set_changepoints()
         self.t_values = [(cp_date - self.train_ds_start.date()) / self.ds_scale for cp_date in self.config.changepoints]
@@ -161,9 +161,13 @@ class BayesTS:
         self.data_assigned = True
 
     def _auto_set_changepoints(self):
+        """
+        select n_changpoints of the from the first changepoint_range of ds values
+        """
         cp_idx_max = int(self.config.changepoint_range * len(self.model_df))
         cp_idx = np.linspace(0, cp_idx_max, self.config.n_changepoints + 1)[1:]
-        self.config.changepoints = self.model_df["ds"].iloc[cp_idx].dt.date.values.tolist()
+        ds_series: pd.Series[pd.Timestamp] = self.model_df["ds"].iloc[cp_idx]
+        self.config.changepoints = ds_series.dt.date.values.tolist()
 
     def set_changepoints(self, changepoints: list[str | dt.date]):
         """

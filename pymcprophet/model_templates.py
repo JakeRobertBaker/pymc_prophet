@@ -20,6 +20,7 @@ class BayesTSConfig(BaseModel):
     changepoint_prior_scale: float = Field(0.05, gt=0)
     forward_support_years: int = Field(45, gt=0)
 
+
 # Prophet input args TODO
 # changepoints=None, TODO
 # n_changepoints=25, TODO
@@ -41,9 +42,8 @@ class Feature(BaseModel, validate_assignment=True):
 
 
 class _RegressorFeature(Feature):
+    family_type: str
     mode: Literal["additive", "multiplicative"]
-    bayes_params: dict[str, float] | None = None
-    # TODO bayes params
     prior_kind: Literal["normal", "laplace"]
     prior_params: dict[str, float]
 
@@ -76,51 +76,63 @@ class ModelSpecification(BaseModel, validate_assignment=True):
 
         self.features = self.features | {feature_name: feature}
 
-    def _get_features(
-        self,
-        family_types_filter: list[Literal["feature", "regressor", "holiday", "seasonal"]] = None,
-        feature_origin_filter: list[Literal["input", "generated"]] = None,
-    ) -> dict[str, Feature | RegressorFeature | SeasonalityFeature]:
+    def _get_feature_dict(self, filter_dict: dict[str, list[str] | str] = {}, required_properties: list[str] = []) -> dict[str, Feature]:
         eligible_feature_dict = self.features
-        if family_types_filter:
+
+        for property_name, property_filter in filter_dict.items():
+            property_filter = [property_filter] if isinstance(property_filter, str) else property_filter
             eligible_feature_dict = {
                 feature_name: feature
                 for feature_name, feature in eligible_feature_dict.items()
-                if feature.family_type in family_types_filter
+                if getattr(feature, property_name) in property_filter
             }
-
-        if feature_origin_filter:
+        for property in required_properties:
             eligible_feature_dict = {
-                feature_name: feature
-                for feature_name, feature in eligible_feature_dict.items()
-                if feature.feature_origin in feature_origin_filter
+                feature_name: feature for feature_name, feature in eligible_feature_dict.items() if hasattr(feature, property)
             }
-
         return eligible_feature_dict
 
-    def get_cols(self):
-        return list(self._get_features().keys())
+    def get_cols(self) -> list[str]:
+        return list(self._get_feature_dict({}).keys())
 
-    def get_input_feature_dict(self):
-        return self._get_features(feature_origin_filter=["input"])
-
-    def get_input_feature_cols(self):
-        return list(self.get_input_feature_dict().keys())
+    def get_input_feature_dict(self) -> dict[str, Feature]:
+        return self._get_feature_dict({"feature_origin": "input"})
 
     def get_seasonality_feature_dict(self) -> dict[str, SeasonalityFeature]:
-        return self._get_features(family_types_filter=["seasonal"])
-
-    def get_seasonality_feature_cols(self):
-        return list(self.get_seasonality_feature_dict().keys())
+        return self._get_feature_dict({"family_type": "seasonal"})
 
     def get_regressor_feature_dict(self) -> dict[str, RegressorFeature]:
-        return self._get_features(family_types_filter=["regressor"])
-
-    def get_regressor_feature_cols(self):
-        return list(self.get_regressor_feature_dict().keys())
+        return self._get_feature_dict({"family_type": "regressor"})
 
     def get_holiday_feature_dict(self) -> dict[str, HolidayFeature]:
-        return self._get_features(family_types_filter=["holiday"])
+        return self._get_feature_dict({"family_type": "holiday"})
 
-    def get_holiday_feature_cols(self):
+    def get_additive_feature_dict(self) -> dict[str, Feature]:
+        return self._get_feature_dict({"mode": "additive"})
+
+    def get_multiplicative_feature_dict(self) -> dict[str, Feature]:
+        return self._get_feature_dict({"mode": "multiplicative"})
+
+    def get_bayes_feature_dict(self) -> dict[str, Feature]:
+        return self._get_feature_dict(required_properties=["prior_params"])
+
+    def get_input_feature_cols(self) -> list[str]:
+        return list(self.get_input_feature_dict().keys())
+
+    def get_seasonality_feature_cols(self) -> list[str]:
+        return list(self.get_seasonality_feature_dict().keys())
+
+    def get_regressor_feature_cols(self) -> list[str]:
+        return list(self.get_regressor_feature_dict().keys())
+
+    def get_holiday_feature_cols(self) -> list[str]:
         return list(self.get_holiday_feature_dict().keys())
+
+    def get_additive_feature_cols(self) -> list[str]:
+        return list(self.get_additive_feature_dict().keys())
+
+    def get_multiplicative_feature_cols(self) -> list[str]:
+        return list(self.get_multiplicative_feature_dict().keys())
+    
+    def get_bayes_feature_cols(self) -> list[str]:
+        return list(self.get_bayes_feature_dict().keys())
