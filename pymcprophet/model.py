@@ -34,11 +34,12 @@ class BayesTS:
     ):
         # get raises Attribute error if country is not avaliable
         get_country_holidays_class(country)
+        # property sets off logic in determine holiday function
         self.holiday_country = country
 
     def add_holiday(
         self,
-        hol_df: pd.DataFrame,
+        holidays_df: pd.DataFrame,
         holiday_family: str = "user_specified_holiday",
         prior_scale: float | None = None,
         mode: Literal["additive", "multiplicative"] | None = None,
@@ -48,7 +49,7 @@ class BayesTS:
         Add user specified holidays
 
         Args:
-            hol_df pd.DataFrame with cols: ds, holiday, upper_window_lower_window
+            holidays_df pd.DataFrame with cols: ds, holiday, upper_window_lower_window
         """
         if self.data_assigned:
             raise ValueError("We do not support adding holidays after data is assigned. Do that before.")
@@ -61,21 +62,21 @@ class BayesTS:
 
         regressor_prior_params = {"mu": 0, "sigma": prior_scale}
 
-        if not is_datetime64_any_dtype(hol_df["ds"]):
-            raise ValueError(f"Holiday 'ds' dtype {hol_df['ds'].dtype} is not datetime")
+        if not is_datetime64_any_dtype(holidays_df["ds"]):
+            raise ValueError(f"Holiday 'ds' dtype {holidays_df['ds'].dtype} is not datetime")
 
         # basic form is equivalent to window = 0
         for window_col in ["lower_window", "upper_window"]:
-            if window_col not in hol_df.columns:
-                hol_df[window_col] = 0
+            if window_col not in holidays_df.columns:
+                holidays_df[window_col] = 0
 
-        for hol_name, hdf in hol_df.groupby("holiday"):
+        for hol_name, hol_df in holidays_df.groupby("holiday"):
             dates = []
             holiday_short = re.sub(pattern=r"\s+", repl="_", string=hol_name)
             holiday_short = re.sub(pattern=r"[^\w]", repl="", string=holiday_short).lower()
 
             # for every permitted lag get the dates
-            for lag in range(-hdf["lower_window"].max(), hdf["upper_window"].max() + 1):
+            for lag in range(-hol_df["lower_window"].max(), hol_df["upper_window"].max() + 1):
                 lag_dates = hol_df.query(" lower_window >= -@lag and upper_window >= @lag ")["ds"].unique() - lag * dt.timedelta(days=1)
                 # treat the lags as separate cols
                 if separate_lags:
@@ -188,9 +189,21 @@ class BayesTS:
     def determine_country_holidays(self):
         if self.holiday_country:
             min_year = self.raw_model_df["ds"].dt.year.min()
+            # forward support is required for out of sample predictor values
             max_year = self.raw_model_df["ds"].dt.year.max() + self.config.forward_support_years
-            hol_df = make_holidays_df(year_list=np.arange(min_year, max_year), country=self.holiday_country)
-            self.add_holiday(hol_df, f"holiday_library_{self.holiday_country}", separate_lags=False)
+            holidays_df = make_holidays_df(year_list=np.arange(min_year, max_year), country=self.holiday_country)
+            # if the hoiday never exists in train time discard it
+            holidays_to_exclude = (  # noqa: F841
+                holidays_df.groupby("holiday")
+                .agg({"ds": "min"})
+                .query("ds > @self.train_ds_end")
+                .reset_index()["holiday"]
+                .unique()
+                .tolist()
+            )
+
+            holidays_df = holidays_df.query("~ holiday.isin(@holidays_to_exclude)").reset_index()
+            self.add_holiday(holidays_df, f"holiday_library_{self.holiday_country}", separate_lags=False)
 
     def validate_input_matrix(self, df: pd.DataFrame):
         """
