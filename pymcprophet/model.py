@@ -139,7 +139,7 @@ class BayesTS:
 
         # ensure basic cols and types are present
         self.validate_input_matrix(df)
-        self.raw_model_df = df[self.get_input_model_cols()]
+        self.raw_model_df = df[self.get_input_model_cols()].copy()
         self.train_ds_start: Timestamp = self.raw_model_df["ds"].min()
         self.train_ds_end: Timestamp = self.raw_model_df["ds"].max()
         self.ds_scale: Timedelta = self.train_ds_end - self.train_ds_start
@@ -223,17 +223,27 @@ class BayesTS:
         self.validate_input_matrix(df)
         return self._produce_model_matrix(df)
 
-    def _produce_model_matrix(self, df: pd.DataFrame):
+    def _produce_model_matrix(self, input_df: pd.DataFrame) -> pd.DataFrame:
         """
         Used in assign model matrix but made generic so we can apply to future df.
         """
-
+        df = input_df.copy()
         # scale variables
         df = self._transform_y(df)
         df = self._transform_regressors(df)
-        df["t"] = (df["ds"] - self.train_ds_start) / self.ds_scale
-        # TODO add transform all other vars may be done, scale time
+        df = self._transform_t(df)
 
+        # add seasonality cols
+        df = self._produce_seasonality_matrix(df)
+
+        # add the holidays
+        for holiday_name, holiday_feature in self.model_spec.get_holiday_feature_dict().items():
+            df[holiday_name] = df["ds"].dt.date.isin(holiday_feature.dates).astype(int)
+
+        return df
+
+    def _produce_seasonality_matrix(self, input_df: pd.DataFrame) -> pd.DataFrame:
+        df = input_df.copy()
         # seasonality uses days since epoch
         day_to_nanosec = 3600 * 24 * int(1e9)
         dates = df["ds"].to_numpy(dtype=np.int64) / day_to_nanosec
@@ -250,7 +260,7 @@ class BayesTS:
             sin_col_names = [f"{family_name}_sin_{n}" for n in n_vals]
             cos_col_names = [f"{family_name}_cos_{n}" for n in n_vals]
 
-            # When we do this for the first time ass these created cols to the model spec
+            # When we do this for the first time add these created cols to the model spec
             if not self.data_assigned:
                 for name in sin_col_names + cos_col_names:
                     # {"peroid": period, "fourier_order": fourier_order, "mode": mode}
@@ -269,10 +279,6 @@ class BayesTS:
             sin_df = pd.DataFrame(sin_terms.T, columns=sin_col_names, index=df.index)
             cos_df = pd.DataFrame(cos_terms.T, columns=cos_col_names, index=df.index)
             df = pd.concat([df, sin_df, cos_df], axis=1)
-
-        # add the holidays
-        for holiday_name, holiday_feature in self.model_spec.get_holiday_feature_dict().items():
-            df[holiday_name] = df["ds"].dt.date.isin(holiday_feature.dates).astype(int)
 
         return df
 
@@ -319,6 +325,11 @@ class BayesTS:
 
     def add_yearly_seasonality(self, fourier_order: int = 10):
         self.add_seasonality_family("yearly", period=365.25, fourier_order=fourier_order, mode=self.config.seasonality_mode)
+
+    def _transform_t(self, input_df: pd.DataFrame) -> pd.DataFrame:
+        df = input_df.copy()
+        df["t"] = (df["ds"] - self.train_ds_start) / self.ds_scale
+        return df
 
     def _transform_y(self, input_df: pd.DataFrame) -> pd.DataFrame:
         """

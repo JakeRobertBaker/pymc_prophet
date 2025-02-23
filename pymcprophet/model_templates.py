@@ -113,8 +113,9 @@ class ModelSpecification(BaseModel, validate_assignment=True):
     def get_multiplicative_feature_dict(self) -> dict[str, Feature]:
         return self._get_feature_dict({"mode": "multiplicative"})
 
-    def get_bayes_feature_dict(self) -> dict[str, Feature]:
-        return self._get_feature_dict(required_properties=["prior_params"])
+    def get_bayes_feature_dict(self, mode: Literal["additive", "multiplicative", None] = None) -> dict[str, _RegressorFeature]:
+        filter_dict = {"mode": mode} if mode else {}
+        return self._get_feature_dict(filter_dict=filter_dict, required_properties=["prior_params"])
 
     def get_input_feature_cols(self) -> list[str]:
         return list(self.get_input_feature_dict().keys())
@@ -133,6 +134,6 @@ class ModelSpecification(BaseModel, validate_assignment=True):
 
     def get_multiplicative_feature_cols(self) -> list[str]:
         return list(self.get_multiplicative_feature_dict().keys())
-    
-    def get_bayes_feature_cols(self) -> list[str]:
-        return list(self.get_bayes_feature_dict().keys())
+
+    def get_bayes_feature_cols(self, mode: Literal["additive", "multiplicative", None] = None) -> list[str]:
+        return list(self.get_bayes_feature_dict(mode).keys())
