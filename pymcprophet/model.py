@@ -9,6 +9,12 @@ import re
 from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, HolidayFeature, ModelSpecification, SeasonalityFeature
 from pymcprophet.utils.make_holiday import make_holidays_df, get_country_holidays_class
 
+from pymc.util import (
+    RandomSeed,
+)
+
+import pymc as pm
+
 
 class BayesTS:
     def __init__(
@@ -129,7 +135,7 @@ class BayesTS:
             ),
         )
 
-    def assign_model_matrix(self, df: pd.DataFrame):
+    def assign_model_matrix(self, raw_df: pd.DataFrame):
         """
         Assign the model data to model class instance.
         This is done once per model.
@@ -139,8 +145,8 @@ class BayesTS:
             raise ValueError("Data already assigned to model")
 
         # ensure basic cols and types are present
-        self.validate_input_matrix(df)
-        self.raw_model_df = df[self.get_input_model_cols()].copy()
+        self.validate_input_matrix(raw_df)
+        self.raw_model_df = raw_df[self.get_input_model_cols()].copy()
         self.train_ds_start: Timestamp = self.raw_model_df["ds"].min()
         self.train_ds_end: Timestamp = self.raw_model_df["ds"].max()
         self.ds_scale: Timedelta = self.train_ds_end - self.train_ds_start
@@ -152,7 +158,7 @@ class BayesTS:
         self.determine_country_holidays()
 
         # use class information to produce the model matrix
-        self.model_df = self._produce_model_matrix(df)
+        self.model_df = self._produce_model_matrix(raw_df)
 
         # once times are defined we can set the t values of the changepoints
         if not self.config.changepoints:
@@ -160,6 +166,121 @@ class BayesTS:
         self.t_values = [(cp_date - self.train_ds_start.date()) / self.ds_scale for cp_date in self.config.changepoints]
 
         self.data_assigned = True
+
+        # some objects that are used during modeling
+        self.additive_feature_dict = self.model_spec.get_bayes_feature_dict(mode="additive")
+        self.multiplicative_feature_dict = self.model_spec.get_bayes_feature_dict(mode="multiplicative")
+
+    def _produce_modelling_data(self, model_df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Product the arrays fed into pm.Data during modelling
+
+        Args:
+            model_df (pd.DataFrame): processed model matrix
+        """
+        t_np = model_df["t"].to_numpy()
+        X_additive = model_df[self.additive_feature_dict.keys()].to_numpy()
+        X_multiplicative = model_df[self.multiplicative_feature_dict.keys()].to_numpy()
+
+        return t_np, X_additive, X_multiplicative
+
+    def fit(self, raw_df: pd.DataFrame, **kwargs):
+        """
+        Fit the model to the raw dataframe
+        """
+        self.assign_model_matrix(raw_df)
+        self._produce_pymc_model()
+
+        sample_args = {"chains": 4, "draws": 2000}
+        sample_args.update(kwargs)
+
+        with self.forecast_model:
+            # sample posterior variables and deterministics, observed is not sampled
+            self.posterior = pm.sample(**sample_args)
+            # sample posterior predictive y_obs
+            self.in_sample_predictive = pm.sample_posterior_predictive(self.posterior)
+
+    def predict(self, future_df: pd.DataFrame):
+        future_model_df = self.produce_model_matrix(future_df)
+        coords = {"time": future_model_df["ds"].to_numpy()}
+        t_np, X_additive, X_multiplicative = self._produce_modelling_data(future_model_df)
+
+        with self.forecast_model:
+            new_data = {"t": t_np}
+            if self.additive_feature_dict:
+                new_data["additive_predictors"] = X_additive
+                coords["additive_features"] = list(self.additive_feature_dict.keys())
+            if self.multiplicative_feature_dict:
+                new_data["multiplicative_predictors"] = X_multiplicative
+                coords["multiplicative_features"] = list(self.multiplicative_feature_dict.keys())
+
+            pm.set_data(new_data, coords=coords)
+            self.out_sample_predictive = pm.sample_posterior_predictive(self.posterior, predictions=True)
+
+    def _produce_pymc_model(self):
+        coords = {"time": self.model_df["ds"].to_numpy()}
+        y = self.model_df["y_trans"].to_numpy()
+        t_np, X_additive, X_multiplicative = self._produce_modelling_data(self.model_df)
+
+        if self.additive_feature_dict:
+            additive_prior_mus = np.array([feature.prior_params["mu"] for feature in self.additive_feature_dict.values()])
+            additive_prior_sigmas = np.array([feature.prior_params["sigma"] for feature in self.additive_feature_dict.values()])
+            coords["additive_features"] = list(self.additive_feature_dict.keys())
+
+        if self.multiplicative_feature_dict:
+            multiplicative_prior_mus = np.array([feature.prior_params["mu"] for feature in self.multiplicative_feature_dict.values()])
+            multiplicative_prior_sigmas = np.array([feature.prior_params["sigma"] for feature in self.multiplicative_feature_dict.values()])
+            coords["multiplicative_features"] = list(self.multiplicative_feature_dict.keys())
+
+        forecast_model = pm.Model(coords=coords)
+
+        with forecast_model:
+            # trend(t) applies to k(t-m),
+            k = pm.Normal("k", mu=0, sigma=5)
+            m = pm.Normal("m", mu=0, sigma=5)
+            t = pm.Data("t", t_np, dims="time")
+            trend = pm.Deterministic("trend", k * t + m, dims="time")
+
+            # defaults get overwritten by additive or multiplicative terms if present
+            additive_terms = 0
+            multiplicative_terms = 0
+
+            if self.additive_feature_dict:
+                additive_predictors = pm.Data("additive_predictors", X_additive, dims=["time", "additive_features"])
+                beta_additive = pm.Normal(
+                    "beta_additive",
+                    mu=additive_prior_mus,
+                    sigma=additive_prior_sigmas,
+                    dims="additive_features",
+                )
+                additive_terms = pm.Deterministic(
+                    "additive_terms",
+                    additive_predictors @ beta_additive,
+                    dims="time",
+                )
+
+            if self.multiplicative_feature_dict:
+                multiplicative_predictors = pm.Data("multiplicative_predictors", X_multiplicative, dims=["time", "multiplicative_features"])
+                beta_multiplicative = pm.Normal(
+                    "beta_multiplicative",
+                    mu=multiplicative_prior_mus,
+                    sigma=multiplicative_prior_sigmas,
+                    dims="multiplicative_features",
+                )
+                multiplicative_terms = pm.Deterministic(
+                    "multiplicative_terms",
+                    multiplicative_predictors @ beta_multiplicative,
+                    dims="time",
+                )
+
+            # predictions
+            y_pred = pm.Deterministic("y_pred", trend * (1 + multiplicative_terms) + additive_terms, dims="time")
+
+            # observation
+            sigma_obs = pm.HalfNormal("sigma_obs", sigma=0.5)
+            y_obs = pm.Normal("y_obs", mu=y_pred, sigma=sigma_obs, observed=y, dims="time")
+
+        self.forecast_model = forecast_model
 
     def _auto_set_changepoints(self):
         """
