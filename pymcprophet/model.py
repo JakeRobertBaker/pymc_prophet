@@ -1,19 +1,17 @@
-from typing import Literal
-import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype
-from pandas import Timestamp, Timedelta
-import numpy as np
 import datetime as dt
 import re
+from typing import Literal
 
-from pymcprophet.model_templates import BayesTSConfig, Feature, RegressorFeature, HolidayFeature, ModelSpecification, SeasonalityFeature
-from pymcprophet.utils.make_holiday import make_holidays_df, get_country_holidays_class
-
-from pymc.util import (
-    RandomSeed,
-)
-
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 import pymc as pm
+from arviz import InferenceData
+from pandas import Timedelta, Timestamp
+from pandas.api.types import is_datetime64_any_dtype
+
+from pymcprophet.model_templates import BayesTSConfig, Feature, HolidayFeature, ModelSpecification, RegressorFeature, SeasonalityFeature
+from pymcprophet.utils.make_holiday import get_country_holidays_class, make_holidays_df
 
 
 class BayesTS:
@@ -196,11 +194,68 @@ class BayesTS:
 
         with self.forecast_model:
             # sample posterior variables and deterministics, observed is not sampled
-            self.posterior = pm.sample(**sample_args)
+            self.posterior: InferenceData = pm.sample(**sample_args)
             # sample posterior predictive y_obs
-            self.in_sample_predictive = pm.sample_posterior_predictive(self.posterior)
+            self.in_sample_predictive: InferenceData = pm.sample_posterior_predictive(self.posterior)
 
-    def predict(self, future_df: pd.DataFrame):
+    def plot(self, out_sample_predictive: InferenceData | None = None, out_sample_y_obs=None, sig=0.05, region_color="mediumblue"):
+        if out_sample_predictive:
+            # plot out of sample predicitve
+            pass
+        if out_sample_y_obs:
+            pass
+            # plot out of sample y obs
+
+        # in sample plots
+        fig = go.Figure()
+
+        # predictive
+        fig.add_trace(
+            go.Scatter(
+                x=self.posterior.constant_data["time"],
+                y=self.in_sample_predictive.posterior_predictive["y_obs"].quantile(q=1 - sig / 2, dim=("chain", "draw")),
+                fill=None,
+                mode="lines",
+                line=dict(width=0, color=region_color),
+                name=f"{100 - 50 * sig} percent",
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=self.posterior.constant_data["time"],
+                y=self.in_sample_predictive.posterior_predictive["y_obs"].quantile(q=sig / 2, dim=("chain", "draw")),
+                fill="tonexty",  # fill area between trace0 and trace1
+                mode="lines",
+                line=dict(width=0, color=region_color),
+                name=f"{50 * sig} percent",
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=self.posterior.constant_data["time"],
+                y=self.in_sample_predictive.posterior_predictive["y_obs"].mean(("chain", "draw")),
+                name="y_pred_mean",
+                mode="lines",
+                line=dict(width=1, color=region_color),
+            )
+        )
+
+        # actuals
+        fig.add_trace(
+            go.Scatter(
+                x=self.posterior.constant_data["time"],
+                y=self.posterior.observed_data["y_obs"],
+                mode="markers",
+                marker=dict(color="red", size=4, opacity=0.6),
+                name="y actual",
+            )
+        )
+
+        return fig
+
+    def predict(self, future_df: pd.DataFrame) -> InferenceData:
         future_model_df = self.produce_model_matrix(future_df)
         coords = {"time": future_model_df["ds"].to_numpy()}
         t_np, X_additive, X_multiplicative = self._produce_modelling_data(future_model_df)
@@ -215,7 +270,9 @@ class BayesTS:
                 coords["multiplicative_features"] = list(self.multiplicative_feature_dict.keys())
 
             pm.set_data(new_data, coords=coords)
-            self.out_sample_predictive = pm.sample_posterior_predictive(self.posterior, predictions=True)
+            out_sample_predictive = pm.sample_posterior_predictive(self.posterior, predictions=True)
+
+            return out_sample_predictive
 
     def _produce_pymc_model(self):
         coords = {"time": self.model_df["ds"].to_numpy()}
