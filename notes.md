@@ -14,14 +14,7 @@
 Conda
 
 ```
-mamba env create -f environment.yaml
-```
-
-To uninstall mamba do `remove --name ENV_NAME --all`.
-
-Created txt file via 
-```
-pip list --format=freeze > requirements.txt
+uv sync
 ```
 
 ## TODO
