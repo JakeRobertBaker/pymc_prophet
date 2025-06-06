@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Literal
 import datetime as dt
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class BayesTSConfig(BaseModel):

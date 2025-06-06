@@ -1,0 +1,26 @@
+[project]
+name = "pymc-prophet"
+version = "0.1.0"
+description = "Reimplementation of Facebook Prophet using PyMC"
+readme = "README.md"
+authors = [
+    { name = "Jake Baker", email = "bakej159.302@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "holidays>=0.74",
+    "plotly>=6.1.2",
+    "pydantic>=2.11.5",
+    "pymc>=5.23.0",
+]
+
+[project.scripts]
+pymc-prophet = "pymc_prophet:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 130
+extend-select = ["I"]

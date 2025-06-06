@@ -10,8 +10,15 @@ from arviz import InferenceData
 from pandas import Timedelta, Timestamp
 from pandas.api.types import is_datetime64_any_dtype
 
-from pymcprophet.model_templates import BayesTSConfig, Feature, HolidayFeature, ModelSpecification, RegressorFeature, SeasonalityFeature
-from pymcprophet.utils.make_holiday import get_country_holidays_class, make_holidays_df
+from pymc_prophet.model_templates import (
+    BayesTSConfig,
+    Feature,
+    HolidayFeature,
+    ModelSpecification,
+    RegressorFeature,
+    SeasonalityFeature,
+)
+from pymc_prophet.utils.make_holiday import get_country_holidays_class, make_holidays_df
 
 
 class BayesTS:
@@ -81,14 +88,20 @@ class BayesTS:
 
             # for every permitted lag get the dates
             for lag in range(-hol_df["lower_window"].max(), hol_df["upper_window"].max() + 1):
-                lag_dates = hol_df.query(" lower_window >= -@lag and upper_window >= @lag ")["ds"].unique() - lag * dt.timedelta(days=1)
+                lag_dates = hol_df.query(" lower_window >= -@lag and upper_window >= @lag ")["ds"].unique() - lag * dt.timedelta(
+                    days=1
+                )
                 # treat the lags as separate cols
                 if separate_lags:
                     holiday_short_delim = holiday_short if lag == 0 else f"{holiday_short}_lag_{lag}"
                     self.model_spec.add_feature(
                         holiday_short_delim,
                         HolidayFeature(
-                            family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=lag_dates
+                            family_name=holiday_family,
+                            mode=mode,
+                            prior_kind="normal",
+                            prior_params=regressor_prior_params,
+                            dates=lag_dates,
                         ),
                     )
                 # else treat all lags as a single col
@@ -101,7 +114,11 @@ class BayesTS:
                 self.model_spec.add_feature(
                     holiday_short,
                     HolidayFeature(
-                        family_name=holiday_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, dates=dates
+                        family_name=holiday_family,
+                        mode=mode,
+                        prior_kind="normal",
+                        prior_params=regressor_prior_params,
+                        dates=dates,
                     ),
                 )
 
@@ -129,7 +146,11 @@ class BayesTS:
         self.model_spec.add_feature(
             reg_name,
             RegressorFeature(
-                family_name=regressor_family, mode=mode, prior_kind="normal", prior_params=regressor_prior_params, standardize=standardize
+                family_name=regressor_family,
+                mode=mode,
+                prior_kind="normal",
+                prior_params=regressor_prior_params,
+                standardize=standardize,
             ),
         )
 
@@ -198,7 +219,9 @@ class BayesTS:
             # sample posterior predictive y_obs
             self.in_sample_predictive: InferenceData = pm.sample_posterior_predictive(self.posterior)
 
-    def plot(self, out_sample_predictive: InferenceData | None = None, out_sample_y_obs=None, sig=0.05, region_color="mediumblue"):
+    def plot(
+        self, out_sample_predictive: InferenceData | None = None, out_sample_y_obs=None, sig=0.05, region_color="mediumblue"
+    ):
         if out_sample_predictive:
             # plot out of sample predicitve
             pass
@@ -285,8 +308,12 @@ class BayesTS:
             coords["additive_features"] = list(self.additive_feature_dict.keys())
 
         if self.multiplicative_feature_dict:
-            multiplicative_prior_mus = np.array([feature.prior_params["mu"] for feature in self.multiplicative_feature_dict.values()])
-            multiplicative_prior_sigmas = np.array([feature.prior_params["sigma"] for feature in self.multiplicative_feature_dict.values()])
+            multiplicative_prior_mus = np.array(
+                [feature.prior_params["mu"] for feature in self.multiplicative_feature_dict.values()]
+            )
+            multiplicative_prior_sigmas = np.array(
+                [feature.prior_params["sigma"] for feature in self.multiplicative_feature_dict.values()]
+            )
             coords["multiplicative_features"] = list(self.multiplicative_feature_dict.keys())
 
         forecast_model = pm.Model(coords=coords)
@@ -317,7 +344,9 @@ class BayesTS:
                 )
 
             if self.multiplicative_feature_dict:
-                multiplicative_predictors = pm.Data("multiplicative_predictors", X_multiplicative, dims=["time", "multiplicative_features"])
+                multiplicative_predictors = pm.Data(
+                    "multiplicative_predictors", X_multiplicative, dims=["time", "multiplicative_features"]
+                )
                 beta_multiplicative = pm.Normal(
                     "beta_multiplicative",
                     mu=multiplicative_prior_mus,
@@ -335,7 +364,7 @@ class BayesTS:
 
             # observation
             sigma_obs = pm.HalfNormal("sigma_obs", sigma=0.5)
-            y_obs = pm.Normal("y_obs", mu=y_pred, sigma=sigma_obs, observed=y, dims="time")
+            y_obs = pm.Normal("y_obs", mu=y_pred, sigma=sigma_obs, observed=y, dims="time")  # noqa: F841
 
         self.forecast_model = forecast_model
 
@@ -484,7 +513,9 @@ class BayesTS:
         min_dt = dt.iloc[dt.values.nonzero()[0]].min()
 
         # yearly if therea are >= 2 years of history
-        if (self.config.yearly_seasonality == "auto" and range >= pd.Timedelta(days=730)) or (self.config.yearly_seasonality == "enabled"):
+        if (self.config.yearly_seasonality == "auto" and range >= pd.Timedelta(days=730)) or (
+            self.config.yearly_seasonality == "enabled"
+        ):
             self.add_yearly_seasonality()
 
         # weekly if there are >= 2 weeks of history and there exists spacing < 7 days
@@ -568,7 +599,9 @@ class BayesTS:
 
         for reg_name, regressor in self.model_spec.get_regressor_feature_dict().items():
             if regressor.standardize:
-                df[f"{reg_name}_std"] = (df[reg_name] - regressor.standardize_params["shift"]) / regressor.standardize_params["scale"]
+                df[f"{reg_name}_std"] = (df[reg_name] - regressor.standardize_params["shift"]) / regressor.standardize_params[
+                    "scale"
+                ]
 
         return df
 

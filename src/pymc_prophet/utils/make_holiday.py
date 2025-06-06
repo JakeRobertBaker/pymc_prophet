@@ -5,9 +5,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import pandas as pd
-
 import holidays
+import pandas as pd
 
 
 def get_country_holidays_class(country):
@@ -32,7 +31,7 @@ def get_country_holidays_class(country):
     return getattr(holidays, country)
 
 
-def make_holidays_df(year_list, country, province=None, state=None)->pd.DataFrame:
+def make_holidays_df(year_list, country, province=None, state=None) -> pd.DataFrame:
     """Make dataframe of holidays for given years and countries
 
     Parameters
