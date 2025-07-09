@@ -3,15 +3,20 @@ name = "pymc-prophet"
 version = "0.1.0"
 description = "Reimplementation of Facebook Prophet using PyMC"
 readme = "README.md"
-authors = [
-    { name = "Jake Baker", email = "bakej159.302@gmail.com" }
-]
+authors = [{ name = "Jake Baker", email = "bakej159.302@gmail.com" }]
 requires-python = "~=3.11.11"
 dependencies = [
     "holidays>=0.74",
-    "jupyter>=1.1.1",
+    "numpy>=2.3.1",
+    "pandas>=2.3.1",
     "plotly>=6.1.2",
     "pydantic>=2.11.5",
+]
+
+[project.optional-dependencies]
+jupyter = ["jupyter>=1.1.1"]
+bayes = [
+    "arviz>=0.21.0",
     "pymc>=5.23.0",
 ]
 
