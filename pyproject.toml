@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Jake Baker", email = "bakej159.302@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = "~=3.11.11"
 dependencies = [
     "holidays>=0.74",
     "jupyter>=1.1.1",
