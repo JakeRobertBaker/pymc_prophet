@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "holidays>=0.74",
+    "jupyter>=1.1.1",
     "plotly>=6.1.2",
     "pydantic>=2.11.5",
     "pymc>=5.23.0",
