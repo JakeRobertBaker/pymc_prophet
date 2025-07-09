@@ -7,8 +7,8 @@ authors = [{ name = "Jake Baker", email = "bakej159.302@gmail.com" }]
 requires-python = "~=3.11.11"
 dependencies = [
     "holidays>=0.76",
-    "numpy>=2.3.1",
-    "pandas>=2.3.1",
+    "numpy>=1.23.5",
+    "pandas>=1.5.3",
     "plotly>=6.2.0",
     "pydantic>=2.11.7",
 ]
