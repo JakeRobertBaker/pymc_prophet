@@ -6,10 +6,10 @@ readme = "README.md"
 authors = [{ name = "Jake Baker", email = "bakej159.302@gmail.com" }]
 requires-python = "~=3.11.11"
 dependencies = [
-    "holidays>=0.76",
-    "numpy>=1.23.5",
-    "pandas>=1.5.3",
-    "plotly>=6.2.0",
+    "holidays~=0.45",
+    "numpy~=1.23.5",
+    "pandas~=1.5.3",
+    "plotly~=5.9.0",
     "pydantic>=2.11.7",
 ]
 
@@ -18,8 +18,13 @@ dependencies = [
 pymc-prophet = "pymc_prophet:main"
 
 [project.optional-dependencies]
-jupyter = ["jupyter>=1.1.1"]
-bayes = ["arviz>=0.22.0", "pymc>=5.23.0"]
+bayes = [
+    "arviz>=0.21.0",
+    "pymc>=5.19.0",
+]
+jupyter = [
+    "jupyter>=1.1.1",
+]
 
 [build-system]
 requires = ["hatchling"]
